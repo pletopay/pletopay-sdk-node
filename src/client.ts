@@ -252,7 +252,7 @@ export class Pletopay {
     if (!(this.timeoutMs > 0)) throw new PletopayError('timeoutMs must be a positive number');
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     if (typeof this.fetchImpl !== 'function')
-      throw new PletopayError('No fetch available: use Node 20+ or pass `fetch`');
+      throw new PletopayError('No fetch available: use Node 24+ or pass `fetch`');
     this.dispatcher = options.dispatcher;
     this.correlationId = options.correlationId;
     this.hooks = options.hooks ?? {};

@@ -4,7 +4,7 @@
 
 - Every endpoint of the merchant API, typed from the published OpenAPI contract.
 - Idempotency keys, automatic retries, cursor pagination, typed errors and webhook signature verification built in.
-- Zero runtime dependencies. Node.js 20 or newer (uses the global `fetch`). ESM and CommonJS. TypeScript types included.
+- Zero runtime dependencies. Node.js 24 or newer (uses the global `fetch`). ESM and CommonJS. TypeScript types included.
 
 ## Install
 

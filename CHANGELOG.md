@@ -2,13 +2,11 @@
 
 All notable changes to `@pletopay/node` are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.0.0] - 2026-11-03
 
 ### Security
 
 - Requests are sent with `redirect: 'error'`: the API never redirects, and following one could re-send the secret key (or replay a POST) to wherever a misconfigured proxy or hijacked name points.
-
-## [1.0.0] - 2026-10-23
 
 ### Added
 
