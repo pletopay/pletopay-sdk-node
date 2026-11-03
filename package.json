@@ -7,10 +7,10 @@
   "homepage": "https://docs.pletopay.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/evidenze/pletopay-sdk-node.git"
+    "url": "git+https://github.com/pletopay/pletopay-sdk-node.git"
   },
   "bugs": {
-    "url": "https://github.com/evidenze/pletopay-sdk-node/issues"
+    "url": "https://github.com/pletopay/pletopay-sdk-node/issues"
   },
   "keywords": [
     "pletopay",
