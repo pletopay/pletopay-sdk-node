@@ -19,6 +19,9 @@ export class Transfers extends Resource {
    * Sends money. `Idempotency-Key` is required by the API: pass `options.idempotencyKey` with a
    * deterministic value (e.g. `payout-<your id>`) so a retry from a crashed process cannot pay twice;
    * the SDK generates a random one only when you omit it.
+   *
+   * The API answers once the bank has, so the default timeout is 90 s. A timeout or connection
+   * error does not mean the transfer failed: retry with the thrown error's `idempotencyKey`.
    */
   create(params: TransferCreateParams, options?: RequestOptions): Promise<Transfer> {
     return this.client.call(OPERATIONS.createTransfer, { body: params, options });

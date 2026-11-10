@@ -3,9 +3,21 @@ import type { ApiErrorBody } from './types';
 /** Base class of every error this SDK throws. */
 export class PletopayError extends Error {
   override name = 'PletopayError';
+  /**
+   * The `Idempotency-Key` the failed request carried (yours or generated), on every error from such
+   * a request: timeouts, connection errors and API errors alike. Retry with it, or look the object
+   * up by your `reference`, before treating the call as failed.
+   */
+  declare readonly idempotencyKey?: string;
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
   }
+}
+
+/** Records the request's `Idempotency-Key` on an error the client is about to throw. */
+export function withIdempotencyKey<E extends PletopayError>(error: E, idempotencyKey: string | undefined): E {
+  if (idempotencyKey !== undefined) (error as { idempotencyKey?: string }).idempotencyKey = idempotencyKey;
+  return error;
 }
 
 export interface RateLimitInfo {
@@ -174,7 +186,10 @@ export class PletopayServerError extends PletopayApiError {
 export class PletopayConnectionError extends PletopayError {
   override name = 'PletopayConnectionError';
 }
-/** The request exceeded `timeoutMs`. */
+/**
+ * The request exceeded `timeoutMs`. The API may still have received it: a timed-out transfer or
+ * refund has not failed. Retry with `idempotencyKey`, or retrieve it by your `reference`.
+ */
 export class PletopayTimeoutError extends PletopayError {
   override name = 'PletopayTimeoutError';
 }

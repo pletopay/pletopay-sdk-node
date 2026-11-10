@@ -5,6 +5,7 @@ import {
   PletopayTimeoutError,
   rateLimitFromHeaders,
   retryAfterMs,
+  withIdempotencyKey,
 } from './errors';
 import type { RateLimitInfo } from './errors';
 import { SPEC_API_VERSION } from './generated/event-types';
@@ -13,7 +14,16 @@ import { Page, toPagePromise } from './core/pagination';
 import type { PagePromise } from './core/pagination';
 import { encodeQuery } from './core/query';
 import type { QueryValue } from './core/query';
-import { DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT_MS, isRetryableStatus, retryDelayMs, sleep } from './core/retry';
+import {
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_TIMEOUT_MS,
+  MONEY_OUT_TIMEOUT_MS,
+  inProgressDelayMs,
+  isInProgress,
+  isRetryableStatus,
+  retryDelayMs,
+  sleep,
+} from './core/retry';
 import type { HttpMethod, Idempotency, OperationDef } from './operations';
 import { Balance } from './resources/balance';
 import { Banks } from './resources/banks';
@@ -84,7 +94,10 @@ export interface PletopayOptions {
    * (`Pletopay.API_VERSION`). `null` sends none, so the version pinned on your organization applies.
    */
   apiVersion?: string | null;
-  /** Per-request timeout. Default 30 000 ms. */
+  /**
+   * Per-request timeout. Default 30 000 ms, and 90 000 ms for the calls that pay out inline
+   * (`transfers.create`, `refunds.create`). A value set here applies to every call.
+   */
   timeoutMs?: number;
   /** Automatic retries of safe requests on network errors, 429, 5xx. Default 2. */
   maxRetries?: number;
@@ -108,6 +121,7 @@ export interface PletopayOptions {
 export interface RequestOptions {
   /** Your own `Idempotency-Key`. Use a deterministic one (e.g. your order id) for money movement. */
   idempotencyKey?: string;
+  /** Overrides the client's timeout (and the 90 s default of `transfers.create` / `refunds.create`). */
   timeoutMs?: number;
   maxRetries?: number;
   /** Cancels the request (and any retry). */
@@ -152,6 +166,8 @@ export interface RawRequestInit {
   /** `text/csv` returns the body as a string in `data`. */
   accept?: 'application/json' | 'text/csv';
   testModeOnly?: boolean;
+  /** The timeout when neither `options.timeoutMs` nor the client's `timeoutMs` was set. Default 30 000 ms. */
+  defaultTimeoutMs?: number;
 }
 
 export interface CallArgs {
@@ -219,6 +235,8 @@ export class Pletopay {
   readonly webhooks: Webhooks;
 
   private readonly secretKey: string;
+  /** `timeoutMs` was passed to the constructor, so it also overrides the per-operation defaults. */
+  private readonly timeoutIsExplicit: boolean;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly dispatcher: unknown;
   private readonly correlationId: string | (() => string) | undefined;
@@ -246,6 +264,7 @@ export class Pletopay {
     this.baseUrl = (options.baseUrl ?? process.env.PLETOPAY_API_URL ?? Pletopay.DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.apiVersion = options.apiVersion === undefined ? Pletopay.API_VERSION : options.apiVersion;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.timeoutIsExplicit = options.timeoutMs !== undefined;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     if (!Number.isInteger(this.maxRetries) || this.maxRetries < 0)
       throw new PletopayError('maxRetries must be a non-negative integer');
@@ -299,6 +318,7 @@ export class Pletopay {
       idempotency: def.idempotency,
       accept: def.accept ?? 'application/json',
       testModeOnly: def.testModeOnly === true,
+      defaultTimeoutMs: def.moneyOut ? MONEY_OUT_TIMEOUT_MS : undefined,
     });
     return attachLastResponse(response.data, response);
   }
@@ -309,6 +329,9 @@ export class Pletopay {
    */
   list<Op extends OperationId>(def: OperationDef<Op>, args: CallArgs = {}): PagePromise<OperationItem<Op>> {
     type Item = OperationItem<Op>;
+    // A list that starts with `ending_before` walks towards newer items, so it continues with
+    // `ending_before` too; every other list continues with `starting_after`.
+    const backward = typeof (args.query as { ending_before?: unknown } | undefined)?.ending_before === 'string';
     const fetchPage = async (query: object | undefined): Promise<Page<Item>> => {
       const response = await this.request<Item[]>(def.method, `/api/v1${fillPath(def.path, args.path)}`, {
         query,
@@ -317,8 +340,15 @@ export class Pletopay {
         idempotency: def.idempotency,
         testModeOnly: def.testModeOnly === true,
       });
-      const page: Page<Item> = new Page(response, (cursor) =>
-        fetchPage({ ...query, starting_after: cursor, ending_before: undefined }),
+      const page: Page<Item> = new Page(
+        response,
+        (cursor) =>
+          fetchPage(
+            backward
+              ? { ...query, ending_before: cursor, starting_after: undefined }
+              : { ...query, starting_after: cursor, ending_before: undefined },
+          ),
+        backward ? 'backward' : 'forward',
       );
       attachLastResponse(page.data, response);
       return page;
@@ -368,8 +398,13 @@ export class Pletopay {
 
     const maxRetries = options.maxRetries ?? this.maxRetries;
     const retryable = method === 'GET' || method === 'DELETE' || idempotencyKey !== undefined;
-    const timeoutMs = options.timeoutMs ?? this.timeoutMs;
+    const timeoutMs =
+      options.timeoutMs ?? (this.timeoutIsExplicit ? this.timeoutMs : (init.defaultTimeoutMs ?? this.timeoutMs));
     const hookBase = { method, url, headers: redact(headers), idempotencyKey };
+    const callStartedAt = Date.now();
+    // `attempt` counts requests sent, `retries` the retry budget spent: waiting for a request that is
+    // still in progress sends more requests without spending any.
+    let retries = 0;
 
     for (let attempt = 0; ; attempt++) {
       const timeoutSignal = AbortSignal.timeout(timeoutMs);
@@ -379,20 +414,27 @@ export class Pletopay {
       this.logger?.debug(`pletopay: ${method} ${path}`, { attempt, idempotencyKey });
 
       let res: Response;
+      let text: string;
       try {
         // The API never redirects. A redirect would mean a misconfigured proxy or a hijacked DNS
         // name, and following it could replay the request (and its secret key) elsewhere.
         const fetchInit: FetchInit = { method, headers, body: bodyText, signal, redirect: 'error' };
         if (this.dispatcher !== undefined) (fetchInit as { dispatcher?: unknown }).dispatcher = this.dispatcher;
         res = await this.fetchImpl(url, fetchInit);
+        // The body is read here so that a timeout or a reset while it arrives is handled (and
+        // retried) like one before the headers.
+        text = await res.text();
       } catch (cause) {
         if (options.signal?.aborted) throw options.signal.reason instanceof Error ? options.signal.reason : cause;
         const timedOut = timeoutSignal.aborted;
-        const error = timedOut
-          ? new PletopayTimeoutError(`${method} ${path} timed out after ${timeoutMs} ms`, { cause })
-          : new PletopayConnectionError(`${method} ${path} failed: ${describe(cause)}`, { cause });
-        if (retryable && attempt < maxRetries) {
-          const delayMs = retryDelayMs(attempt);
+        const error = withIdempotencyKey(
+          timedOut
+            ? new PletopayTimeoutError(`${method} ${path} timed out after ${timeoutMs} ms`, { cause })
+            : new PletopayConnectionError(`${method} ${path} failed: ${describe(cause)}`, { cause }),
+          idempotencyKey,
+        );
+        if (retryable && retries < maxRetries) {
+          const delayMs = retryDelayMs(retries++);
           await this.hooks.onRetry?.({
             ...hookBase,
             attempt,
@@ -418,7 +460,7 @@ export class Pletopay {
       });
 
       if (res.ok) {
-        const envelope = await parseSuccess(res, init.accept ?? 'application/json');
+        const envelope = parseSuccess(res, text, init.accept ?? 'application/json', idempotencyKey);
         return {
           data: envelope.data as T,
           message: envelope.message,
@@ -435,31 +477,33 @@ export class Pletopay {
         };
       }
 
-      const body = await parseBody(res);
-      const error = PletopayApiError.fromResponse(res.status, body, res.headers);
-      if (retryable && attempt < maxRetries && isRetryableStatus(res.status, error.code)) {
-        const delayMs = retryDelayMs(attempt, {
-          retryAfterMs: retryAfterMs(res.headers),
-          status: res.status,
-          code: error.code,
-        });
-        await this.hooks.onRetry?.({
-          ...hookBase,
-          attempt,
-          reason: 'status',
-          status: res.status,
-          code: error.code,
-          delayMs,
-        });
-        this.logger?.warn(`pletopay: retrying ${method} ${path} after HTTP ${res.status}`, {
-          attempt,
-          delayMs,
-          code: error.code,
-        });
-        await sleep(delayMs, options.signal);
-        continue;
+      const error = withIdempotencyKey(
+        PletopayApiError.fromResponse(res.status, parseBody(text), res.headers),
+        idempotencyKey,
+      );
+      let delayMs: number | undefined;
+      if (isInProgress(res.status, error.code) && idempotencyKey !== undefined && maxRetries > 0) {
+        // The first attempt is still running on the API (a slow bank, usually): keep asking with the
+        // same key until it answers or the wait runs out. This does not spend the retry budget.
+        delayMs = inProgressDelayMs(callStartedAt, { retryAfterMs: retryAfterMs(res.headers) });
+      } else if (retryable && retries < maxRetries && isRetryableStatus(res.status, error.code)) {
+        delayMs = retryDelayMs(retries++, { retryAfterMs: retryAfterMs(res.headers) });
       }
-      throw error;
+      if (delayMs === undefined) throw error;
+      await this.hooks.onRetry?.({
+        ...hookBase,
+        attempt,
+        reason: 'status',
+        status: res.status,
+        code: error.code,
+        delayMs,
+      });
+      this.logger?.warn(`pletopay: retrying ${method} ${path} after HTTP ${res.status}`, {
+        attempt,
+        delayMs,
+        code: error.code,
+      });
+      await sleep(delayMs, options.signal);
     }
   }
 }
@@ -490,8 +534,7 @@ function describe(cause: unknown): string {
   return String(cause);
 }
 
-async function parseBody(res: Response): Promise<unknown> {
-  const text = await res.text();
+function parseBody(text: string): unknown {
   if (!text) return undefined;
   try {
     return JSON.parse(text) as unknown;
@@ -506,11 +549,11 @@ interface Envelope {
   meta: ListMeta | undefined;
 }
 
-async function parseSuccess(res: Response, accept: string): Promise<Envelope> {
+function parseSuccess(res: Response, text: string, accept: string, idempotencyKey: string | undefined): Envelope {
   if (accept === 'text/csv') {
-    return { data: await res.text(), message: 'OK', meta: undefined };
+    return { data: text, message: 'OK', meta: undefined };
   }
-  const body = await parseBody(res);
+  const body = parseBody(text);
   if (typeof body === 'object' && body !== null && 'status' in body && 'data' in body) {
     const envelope = body as { status: unknown; message?: unknown; data: unknown; meta?: unknown };
     return {
@@ -519,7 +562,10 @@ async function parseSuccess(res: Response, accept: string): Promise<Envelope> {
       meta: isListMeta(envelope.meta) ? envelope.meta : undefined,
     };
   }
-  throw new PletopayApiError(res.status, body, res.headers, 'The API returned an unexpected response body');
+  throw withIdempotencyKey(
+    new PletopayApiError(res.status, body, res.headers, 'The API returned an unexpected response body'),
+    idempotencyKey,
+  );
 }
 
 function isListMeta(value: unknown): value is ListMeta {

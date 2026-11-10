@@ -3,6 +3,7 @@
  * with one of these entries, and test/spec-conformance.spec.ts checks the table against
  * spec/public.v1.yaml: method, path, whether `Idempotency-Key` is accepted or required, the
  * query parameters, list-ness and test-mode-only flags. `sdk` names the method that implements it.
+ * `moneyOut` is the SDK's own: it is not in the contract.
  */
 import type { OperationId } from './types';
 
@@ -26,6 +27,11 @@ export interface OperationDef<Op extends OperationId = OperationId> {
   readonly accept?: 'text/csv';
   /** Only callable with a test key; the SDK refuses it locally with a live key. */
   readonly testModeOnly?: true;
+  /**
+   * Pays out inline: the API answers only once the bank has (up to 75 s), so the default timeout is
+   * `MONEY_OUT_TIMEOUT_MS` instead of 30 s.
+   */
+  readonly moneyOut?: true;
 }
 
 export const OPERATIONS = {
@@ -214,6 +220,7 @@ export const OPERATIONS = {
     path: '/transfers',
     idempotency: 'required',
     sdk: 'transfers.create',
+    moneyOut: true,
   },
   listTransfers: {
     id: 'listTransfers',
@@ -276,6 +283,7 @@ export const OPERATIONS = {
     path: '/refunds',
     idempotency: 'required',
     sdk: 'refunds.create',
+    moneyOut: true,
   },
   listRefunds: {
     id: 'listRefunds',

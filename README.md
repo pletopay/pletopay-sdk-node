@@ -45,7 +45,7 @@ const pletopay = new Pletopay({
   secretKey: 'sk_test_…', // default: process.env.PLETOPAY_SECRET_KEY
   baseUrl: 'https://api.pletopay.com', // default: process.env.PLETOPAY_API_URL, then this
   apiVersion: '2026-09-25', // the dated version this SDK's types describe (default); null to use your organization's pin
-  timeoutMs: 30000, // per request
+  timeoutMs: 30000, // per request; when omitted: 30 s, and 90 s for transfers.create and refunds.create
   maxRetries: 2, // see Retries
   webhookSecret: process.env.PLETOPAY_WEBHOOK_SECRET, // for pletopay.webhooks.constructEvent
   correlationId: () => requestContext.id, // sent as X-Correlation-Id
@@ -139,6 +139,16 @@ const next = await page.nextPage(); // null on the last page
 const firstHundred = await pletopay.transfers.list().autoPagingToArray({ limit: 100 });
 ```
 
+Lists are newest first, and iterating walks towards older objects. Start a list with `ending_before` to go the other way, for example to pick up everything created since the last object you processed:
+
+```ts
+for await (const payment of pletopay.payments.list({ ending_before: lastSeenPaymentId })) {
+  // every payment newer than lastSeenPaymentId, oldest first
+}
+```
+
+On such a list, iteration and `autoPagingToArray()` yield oldest to newest across all pages, `nextPage()` / `pages()` move to the next newer page, and `page.nextCursor` is the id to pass as `ending_before` (not `starting_after`). Each `page.data` stays in the order the API returned it: newest first.
+
 Filters use the API's bracket syntax under the hood (`created[gte]`, `amount[lte]`, `expand[]`); pass plain objects and arrays.
 
 ## Errors
@@ -173,11 +183,31 @@ try {
 | `PletopayConnectionError` / `PletopayTimeoutError` | no response / `timeoutMs` exceeded                              |
 | `PletopaySignatureVerificationError`               | a webhook did not verify                                        |
 
-All of them extend `PletopayError`. `requestId` is on every API error: quote it to support. The full catalogue of codes is in the [API reference](https://docs.pletopay.com/reference/errors).
+All of them extend `PletopayError`. `requestId` is on every API error: quote it to support. `idempotencyKey` is on every error from a request that carried an `Idempotency-Key`, including timeouts and connection errors (see below). The full catalogue of codes is in the [API reference](https://docs.pletopay.com/reference/errors).
 
 ## Retries and idempotency
 
 Network errors, timeouts, `429`, `500`, `502`, `503` and `409 idempotency_request_in_progress` are retried up to `maxRetries` times (default 2) with exponential backoff and jitter, honouring `Retry-After`. A request is retried only when that is safe: `GET`/`DELETE`, or a write that carries an `Idempotency-Key`. Writes to endpoints that accept the header get a generated UUID key when you do not pass one, so the retry replays the same request instead of acting twice.
+
+`transfers.create` and `refunds.create` answer only once the bank has, which can take up to 75 seconds. Their default timeout is therefore 90 seconds instead of 30; a `timeoutMs` you set on the client or on the call still wins.
+
+`409 idempotency_request_in_progress` means the first attempt with that key is still running. When retries are on (`maxRetries` > 0), the SDK asks again with the same key about every 2 seconds (or after `Retry-After`) without using up `maxRetries`, until the first attempt answers or 90 seconds have passed since the call started. Then it throws the `PletopayIdempotencyError`.
+
+**A timeout or a connection error on a transfer or refund does not mean it failed.** The API may have received the request and may still pay out. Every error thrown for a request that carried an `Idempotency-Key` exposes it as `error.idempotencyKey`, whether you passed the key or the SDK generated it. Use it before you tell anyone the money did not move:
+
+```ts
+import { PletopayError } from '@pletopay/node';
+
+try {
+  await pletopay.transfers.create(params, { idempotencyKey: 'payout-PAYOUT-2026-0001' });
+} catch (error) {
+  if (error instanceof PletopayError && error.idempotencyKey) {
+    // Same key and same body: the API replays the first outcome instead of paying twice.
+    await pletopay.transfers.create(params, { idempotencyKey: error.idempotencyKey });
+    // Or look it up: pletopay.transfers.retrieveByReference(params.reference)
+  }
+}
+```
 
 ## Webhooks
 

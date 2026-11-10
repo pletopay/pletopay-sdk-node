@@ -13,6 +13,9 @@ export class Refunds extends Resource {
    * Refunds a payment (whole, or `amount` of it). `Idempotency-Key` is required by the API: pass
    * `options.idempotencyKey` with a deterministic value (e.g. `refund-<your id>`); the SDK
    * generates a random one only when you omit it.
+   *
+   * The API answers once the bank has, so the default timeout is 90 s. A timeout or connection
+   * error does not mean the refund failed: retry with the thrown error's `idempotencyKey`.
    */
   create(params: RefundCreateParams, options?: RequestOptions): Promise<Refund> {
     return this.client.call(OPERATIONS.createRefund, { body: params, options });

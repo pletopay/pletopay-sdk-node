@@ -143,7 +143,10 @@ export interface ListParams {
   limit?: number;
   /** Return objects created before this object id (older). Pass `meta.next_cursor`. */
   starting_after?: string;
-  /** Return objects created after this object id (newer). Not together with `starting_after`. */
+  /**
+   * Return objects created after this object id (newer). Not together with `starting_after`.
+   * Auto-pagination then walks towards newer objects and yields them oldest first.
+   */
   ending_before?: string;
   created?: DateRangeFilter;
 }
