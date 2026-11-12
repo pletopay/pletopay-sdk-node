@@ -3757,7 +3757,9 @@ paths:
       description: |-
         Send money from your available balance to any Nigerian bank account. **`Idempotency-Key` is required**: if the request times out, retry with the same key and you will get the original transfer, never a second one.
 
-        Resolve the account first with `POST /api/v1/transfers/name-enquiry`. The amount plus fees (`total_debit`) is reserved from your available balance immediately (`400 insufficient_funds` otherwise). The minimum transfer is ₦10.00 (`400 amount_below_minimum`) and `narration` is limited to 50 characters.
+        Give the recipient as `beneficiary` (bank code and account number), or pay a saved beneficiary with `beneficiary_id` (`ben_…`); not both. Resolve a new account first with `POST /api/v1/transfers/name-enquiry`. The account name is checked on every transfer; for a saved beneficiary whose account no longer carries the saved name, nothing is sent (`409 beneficiary_name_changed`). The recipient of every successful transfer is saved as a beneficiary.
+
+        The amount plus fees (`total_debit`) is reserved from your available balance immediately (`400 insufficient_funds` otherwise). The minimum transfer is ₦100.00 (`400 amount_below_minimum`) and `narration` is limited to 50 characters.
 
         A transfer whose outcome isn’t known yet stays `processing`; it is never reported `failed` until it is confirmed. Listen for `transfer.succeeded` / `transfer.failed`. A failed transfer releases the reserved funds.
 
@@ -3821,8 +3823,10 @@ paths:
                   livemode: false
                   reference: PAYOUT-2026-0001
                   amount: 2500000
-                  fee: 1500
-                  total_debit: 2501500
+                  fee: 7000
+                  transfer_charge: 2000
+                  stamp_duty: 5000
+                  total_debit: 2507000
                   currency: NGN
                   status: processing
                   beneficiary:
@@ -3998,6 +4002,13 @@ paths:
               - failed
               - reversed
           description: Only objects with this status.
+        - name: q
+          required: false
+          in: query
+          description: "Search: a transfer id (trf_…, exact), your reference (starts with), the beneficiary account number (starts with), or the session id (exact)"
+          schema:
+            maxLength: 100
+            type: string
         - name: PletoPay-Version
           in: header
           description: Dated API version. Defaults to the version pinned on your organization.
@@ -4038,8 +4049,10 @@ paths:
                     livemode: false
                     reference: PAYOUT-2026-0001
                     amount: 2500000
-                    fee: 1500
-                    total_debit: 2501500
+                    fee: 7000
+                    transfer_charge: 2000
+                    stamp_duty: 5000
+                    total_debit: 2507000
                     currency: NGN
                     status: processing
                     beneficiary:
@@ -4177,8 +4190,10 @@ paths:
                   livemode: false
                   reference: PAYOUT-2026-0001
                   amount: 2500000
-                  fee: 1500
-                  total_debit: 2501500
+                  fee: 7000
+                  transfer_charge: 2000
+                  stamp_duty: 5000
+                  total_debit: 2507000
                   currency: NGN
                   status: processing
                   beneficiary:
@@ -4327,8 +4342,10 @@ paths:
                   livemode: false
                   reference: PAYOUT-2026-0001
                   amount: 2500000
-                  fee: 1500
-                  total_debit: 2501500
+                  fee: 7000
+                  transfer_charge: 2000
+                  stamp_duty: 5000
+                  total_debit: 2507000
                   currency: NGN
                   status: processing
                   beneficiary:
@@ -4697,6 +4714,2679 @@ paths:
       x-required-scopes:
         - transfers:read
       description: List the banks you can send transfers to, with the `code` to use as `bank_code`. The list is cached for an hour.
+  /api/v1/transfer-batches:
+    post:
+      description: |-
+        Start a bulk transfer: many payouts that are checked, reviewed and sent together. **`Idempotency-Key` is required.**
+
+        A batch has no row limit. Send up to 1,000 rows here and add the rest with `POST /api/v1/transfer-batches/{id}/items`, then call `POST /api/v1/transfer-batches/{id}/validate`. Pass `validate: true` to validate straight away when all rows fit in this request. If any row is invalid (for example below the ₦100.00 minimum, or a duplicate `reference`), nothing is added and `400 batch_items_invalid` lists the rows in `error.details.errors`.
+
+        Nothing is held or sent until you submit.
+      operationId: createTransferBatch
+      parameters:
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          description: "Required. A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours."
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTransferBatchDto"
+            example:
+              name: November payroll
+              reference: PAYROLL-2026-11
+              items:
+                - bank_code: "058"
+                  account_number: "0123456789"
+                  amount: 25000000
+                  narration: November salary
+                - bank_code: "044"
+                  account_number: "9876543210"
+                  amount: 18000000
+                  reference: PAYROLL-2026-11-EMP-42
+              validate: true
+      responses:
+        "201":
+          description: The new bulk transfer, `draft` (or `validating`).
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/TransferBatch"
+              example:
+                status: true
+                message: Transfer batch created
+                data:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "409":
+          description: |-
+            Conflict (duplicate reference, invalid state, request in progress)
+
+            A request with this Idempotency-Key is still in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: A payment with reference ORDER-12345 already exists
+                error:
+                  type: conflict
+                  code: duplicate_reference
+                  param: reference
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "422":
+          description: Idempotency-Key reused with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: This Idempotency-Key was used with a different request
+                error:
+                  type: idempotency_error
+                  code: idempotency_key_reused
+                  param: Idempotency-Key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Create a bulk transfer
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:write
+    get:
+      operationId: listTransferBatches
+      parameters:
+        - name: limit
+          required: false
+          in: query
+          description: Number of objects to return
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 10
+            type: number
+        - name: starting_after
+          required: false
+          in: query
+          description: "Cursor: return objects created before this object id (older)"
+          schema:
+            type: string
+        - name: ending_before
+          required: false
+          in: query
+          description: "Cursor: return objects created after this object id (newer)"
+          schema:
+            type: string
+        - name: created
+          required: false
+          in: query
+          description: Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z
+          schema:
+            $ref: "#/components/schemas/DateRangeFilter"
+          style: deepObject
+          explode: true
+        - name: status
+          required: false
+          in: query
+          schema:
+            type: string
+            enum:
+              - draft
+              - validating
+              - ready
+              - processing
+              - completed
+              - partially_completed
+              - failed
+              - cancelled
+          description: Only objects with this status.
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of bulk transfers, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                  - meta
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TransferBatch"
+                  meta:
+                    $ref: "#/components/schemas/ListMeta"
+              example:
+                status: true
+                message: Transfer batchs retrieved
+                data:
+                  - id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                    object: transfer_batch
+                    livemode: false
+                    reference: string
+                    name: string
+                    status: draft
+                    source: api
+                    currency: NGN
+                    item_count: 0
+                    counts:
+                      validating: 0
+                      valid: 0
+                      invalid: 0
+                      removed: 0
+                      queued: 0
+                      processing: 0
+                      succeeded: 0
+                      failed: 0
+                      reversed: 0
+                    total_amount: 0
+                    total_fees: 0
+                    total_debit: 0
+                    reserved_amount: 0
+                    failure_reason: string
+                    metadata: {}
+                    created_at: 2026-09-24T18:00:00.000Z
+                    submitted_at: 2026-09-24T18:00:00.000Z
+                    completed_at: 2026-09-24T18:00:00.000Z
+                    cancelled_at: 2026-09-24T18:00:00.000Z
+                meta:
+                  has_more: false
+                  next_cursor: null
+                  url: /api/v1/transfer-batches
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: List bulk transfers
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:read
+      description: List bulk transfers. Filter by `status`.
+  /api/v1/transfer-batches/{id}:
+    get:
+      operationId: getTransferBatch
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The bulk transfer id (`tb_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The bulk transfer.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/TransferBatch"
+              example:
+                status: true
+                message: Transfer batch retrieved
+                data:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Retrieve a bulk transfer
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:read
+      description: Retrieve a bulk transfer by id (`tb_…`). `counts` gives the number of rows in each status; poll it (or listen for `transfer_batch.completed`) to follow progress.
+  /api/v1/transfer-batches/{id}/items:
+    get:
+      description: "List a bulk transfer’s rows in upload order, up to 500 at a time (`starting_after` = the last row’s id). Filter by `status`: `validating`, `valid`, `invalid`, `removed`, `queued`, then for sent rows their transfer’s `processing`, `succeeded`, `failed` or `reversed`."
+      operationId: listTransferBatchItems
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The bulk transfer id (`tb_…`).
+        - name: limit
+          required: false
+          in: query
+          description: Number of rows to return
+          schema:
+            minimum: 1
+            maximum: 500
+            default: 50
+            type: number
+        - name: starting_after
+          required: false
+          in: query
+          description: "Cursor: return rows after this row id (rows are in upload order)"
+          schema:
+            type: string
+        - name: status
+          required: false
+          in: query
+          schema:
+            type: string
+            enum:
+              - validating
+              - valid
+              - invalid
+              - removed
+              - queued
+              - processing
+              - succeeded
+              - failed
+              - reversed
+          description: Only objects with this status.
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of rows, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                  - meta
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TransferBatchItem"
+                  meta:
+                    $ref: "#/components/schemas/ListMeta"
+              example:
+                status: true
+                message: Transfer batch items retrieved
+                data:
+                  - id: tbi_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                    object: transfer_batch_item
+                    batch: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                    index: 0
+                    status: validating
+                    bank_code: string
+                    bank_name: string
+                    account_number: "0123456789"
+                    account_name: string
+                    amount: 0
+                    fee: 0
+                    total_debit: 0
+                    narration: string
+                    reference: string
+                    metadata: {}
+                    error:
+                      code: string
+                      message: string
+                    transfer: trf_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                    created_at: 2026-09-24T18:00:00.000Z
+                meta:
+                  has_more: false
+                  next_cursor: null
+                  url: /api/v1/transfer-batches
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: List a bulk transfer's rows
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:read
+    post:
+      description: "Append up to 1,000 rows to a `draft` bulk transfer. **`Idempotency-Key` is required**, so a retried chunk is never added twice. All or nothing: if any row is invalid, none is added (`400 batch_items_invalid`)."
+      operationId: addTransferBatchItems
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The bulk transfer id (`tb_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          description: "Required. A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours."
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddBatchItemsDto"
+            example:
+              items:
+                - bank_code: "058"
+                  account_number: "0123456789"
+                  amount: 25000000
+                  narration: November salary
+      responses:
+        "201":
+          description: The bulk transfer with its new totals.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/TransferBatch"
+              example:
+                status: true
+                message: Transfer batch created
+                data:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "409":
+          description: |-
+            Conflict (duplicate reference, invalid state, request in progress)
+
+            A request with this Idempotency-Key is still in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: A payment with reference ORDER-12345 already exists
+                error:
+                  type: conflict
+                  code: duplicate_reference
+                  param: reference
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "422":
+          description: Idempotency-Key reused with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: This Idempotency-Key was used with a different request
+                error:
+                  type: idempotency_error
+                  code: idempotency_key_reused
+                  param: Idempotency-Key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Add rows to a bulk transfer
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:write
+  /api/v1/transfer-batches/{id}/items/{itemId}:
+    patch:
+      description: "Fix a row before you submit: the bank code, account number, amount, narration or reference. Changing the account (or editing an `invalid` row) checks it again, and the batch is `validating` until it is done."
+      operationId: updateTransferBatchItem
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The bulk transfer id (`tb_…`).
+        - name: itemId
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The row id (`tbi_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          description: "A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours."
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBatchItemDto"
+            example:
+              account_number: "0123456780"
+      responses:
+        "200":
+          description: The updated row.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/TransferBatchItem"
+              example:
+                status: true
+                message: Transfer batch item updated
+                data:
+                  id: tbi_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch_item
+                  batch: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  index: 0
+                  status: validating
+                  bank_code: string
+                  bank_name: string
+                  account_number: "0123456789"
+                  account_name: string
+                  amount: 0
+                  fee: 0
+                  total_debit: 0
+                  narration: string
+                  reference: string
+                  metadata: {}
+                  error:
+                    code: string
+                    message: string
+                  transfer: trf_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  created_at: 2026-09-24T18:00:00.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "409":
+          description: |-
+            Conflict (duplicate reference, invalid state, request in progress)
+
+            A request with this Idempotency-Key is still in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: A payment with reference ORDER-12345 already exists
+                error:
+                  type: conflict
+                  code: duplicate_reference
+                  param: reference
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "422":
+          description: Idempotency-Key reused with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: This Idempotency-Key was used with a different request
+                error:
+                  type: idempotency_error
+                  code: idempotency_key_reused
+                  param: Idempotency-Key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Edit a row
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:write
+    delete:
+      description: Remove a row before you submit. It is kept, as `removed`, and left out of the totals.
+      operationId: removeTransferBatchItem
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The bulk transfer id (`tb_…`).
+        - name: itemId
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The row id (`tbi_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The bulk transfer with its new totals.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/TransferBatch"
+              example:
+                status: true
+                message: Transfer batch deleted
+                data:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "409":
+          description: Conflict (duplicate reference, invalid state, request in progress)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: A payment with reference ORDER-12345 already exists
+                error:
+                  type: conflict
+                  code: duplicate_reference
+                  param: reference
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Remove a row
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:write
+  /api/v1/transfer-batches/{id}/validate:
+    post:
+      description: Close a `draft` to new rows and check every account (name enquiry). The batch is `validating`, then `ready`; each row is `valid` (with `account_name`) or `invalid` (with `error`). Rows checked per day are capped at twice your daily transfer count (`403 batch_validation_limit`). In live mode this needs an approved business verification.
+      operationId: validateTransferBatch
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The bulk transfer id (`tb_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          description: "A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours."
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The bulk transfer, `validating`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/TransferBatch"
+              example:
+                status: true
+                message: Request successful
+                data:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "409":
+          description: |-
+            Conflict (duplicate reference, invalid state, request in progress)
+
+            A request with this Idempotency-Key is still in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: A payment with reference ORDER-12345 already exists
+                error:
+                  type: conflict
+                  code: duplicate_reference
+                  param: reference
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "422":
+          description: Idempotency-Key reused with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: This Idempotency-Key was used with a different request
+                error:
+                  type: idempotency_error
+                  code: idempotency_key_reused
+                  param: Idempotency-Key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Validate a bulk transfer
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:write
+  /api/v1/transfer-batches/{id}/submit:
+    post:
+      description: |-
+        Send a `ready` bulk transfer. **`Idempotency-Key` is required.**
+
+        All or nothing: the whole cost of the `valid` rows (amounts, transfer charges and stamp duty: `total_debit`) is held from your available balance at once, or nothing is held (`400 insufficient_funds`). The batch must also fit your risk limits as a whole (`403 risk_limit_exceeded`). `invalid` rows are skipped.
+
+        The rows are then sent one by one, each as an ordinary transfer with its own `transfer.*` events and the batch’s id in `batch`. Just before each row is sent its account is checked again: if the name no longer matches the one you reviewed, that row is not sent (`account_name_changed`). When every transfer is final, anything left of the hold returns to your available balance and `transfer_batch.completed` is sent. A submitted batch can’t be cancelled.
+      operationId: submitTransferBatch
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The bulk transfer id (`tb_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          description: "Required. A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours."
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The bulk transfer, `processing`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/TransferBatch"
+              example:
+                status: true
+                message: Transfer batch submitted
+                data:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "409":
+          description: |-
+            Conflict (duplicate reference, invalid state, request in progress)
+
+            A request with this Idempotency-Key is still in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: A payment with reference ORDER-12345 already exists
+                error:
+                  type: conflict
+                  code: duplicate_reference
+                  param: reference
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "422":
+          description: Idempotency-Key reused with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: This Idempotency-Key was used with a different request
+                error:
+                  type: idempotency_error
+                  code: idempotency_key_reused
+                  param: Idempotency-Key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "503":
+          description: The service is temporarily unavailable. Nothing was sent or created; retry later with the same Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: The service is temporarily unavailable. Nothing was sent or created; retry shortly.
+                error:
+                  type: api_error
+                  code: service_unavailable
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Submit a bulk transfer
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:write
+  /api/v1/transfer-batches/{id}/cancel:
+    post:
+      description: Cancel a bulk transfer before you submit it. Nothing is held before submit, so nothing moves.
+      operationId: cancelTransferBatch
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The bulk transfer id (`tb_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          description: "A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours."
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The bulk transfer, `cancelled`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/TransferBatch"
+              example:
+                status: true
+                message: Transfer batch canceled
+                data:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "409":
+          description: |-
+            Conflict (duplicate reference, invalid state, request in progress)
+
+            A request with this Idempotency-Key is still in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: A payment with reference ORDER-12345 already exists
+                error:
+                  type: conflict
+                  code: duplicate_reference
+                  param: reference
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "422":
+          description: Idempotency-Key reused with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: This Idempotency-Key was used with a different request
+                error:
+                  type: idempotency_error
+                  code: idempotency_key_reused
+                  param: Idempotency-Key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Cancel a bulk transfer
+      tags:
+        - Bulk transfers
+      x-required-scopes:
+        - transfers:write
+  /api/v1/beneficiaries:
+    get:
+      description: "List saved beneficiaries. The recipient of every successful transfer is saved automatically (`source: transfer`), and you can save accounts yourself (`source: manual`). Search with `q`: an id, the start of an account number, or part of the account name or nickname."
+      operationId: listBeneficiaries
+      parameters:
+        - name: limit
+          required: false
+          in: query
+          description: Number of objects to return
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 10
+            type: number
+        - name: starting_after
+          required: false
+          in: query
+          description: "Cursor: return objects created before this object id (older)"
+          schema:
+            type: string
+        - name: ending_before
+          required: false
+          in: query
+          description: "Cursor: return objects created after this object id (newer)"
+          schema:
+            type: string
+        - name: created
+          required: false
+          in: query
+          description: Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z
+          schema:
+            $ref: "#/components/schemas/DateRangeFilter"
+          style: deepObject
+          explode: true
+        - name: q
+          required: false
+          in: query
+          description: "Search: a beneficiary id (ben_…, exact), an account number (starts with), or part of the account name or nickname"
+          schema:
+            maxLength: 100
+            type: string
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of beneficiaries, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                  - meta
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Beneficiary"
+                  meta:
+                    $ref: "#/components/schemas/ListMeta"
+              example:
+                status: true
+                message: Beneficiaries retrieved
+                data:
+                  - id: ben_01J8Z5X7Q9K2M4N6P8R0S2T4W7
+                    object: beneficiary
+                    livemode: false
+                    bank_code: "058"
+                    bank_name: Guaranty Trust Bank
+                    account_number: "0123456789"
+                    account_name: ADA VENDOR ENTERPRISES
+                    nickname: Office rent
+                    source: transfer
+                    last_paid_at: 2026-09-24T18:04:12.000Z
+                    created_at: 2026-09-24T18:00:00.000Z
+                    updated_at: 2026-09-24T18:04:12.000Z
+                meta:
+                  has_more: false
+                  next_cursor: null
+                  url: /api/v1/beneficiaries
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: List saved beneficiaries
+      tags:
+        - Beneficiaries
+      x-required-scopes:
+        - transfers:read
+    post:
+      description: Save a bank account so you can pay it with `beneficiary_id` instead of sending account details each time. The account name is resolved first (`400 account_not_resolved` if it can’t be). An account already saved in this mode returns `409 beneficiary_exists`. Up to 5,000 beneficiaries per mode.
+      operationId: createBeneficiary
+      parameters:
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          description: "A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours."
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBeneficiaryDto"
+            example:
+              bank_code: "058"
+              account_number: "0123456789"
+              nickname: Office rent
+      responses:
+        "201":
+          description: The new beneficiary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/Beneficiary"
+              example:
+                status: true
+                message: Beneficiary created
+                data:
+                  id: ben_01J8Z5X7Q9K2M4N6P8R0S2T4W7
+                  object: beneficiary
+                  livemode: false
+                  bank_code: "058"
+                  bank_name: Guaranty Trust Bank
+                  account_number: "0123456789"
+                  account_name: ADA VENDOR ENTERPRISES
+                  nickname: Office rent
+                  source: transfer
+                  last_paid_at: 2026-09-24T18:04:12.000Z
+                  created_at: 2026-09-24T18:00:00.000Z
+                  updated_at: 2026-09-24T18:04:12.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "409":
+          description: |-
+            Conflict (duplicate reference, invalid state, request in progress)
+
+            A request with this Idempotency-Key is still in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: A payment with reference ORDER-12345 already exists
+                error:
+                  type: conflict
+                  code: duplicate_reference
+                  param: reference
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "422":
+          description: Idempotency-Key reused with a different request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: This Idempotency-Key was used with a different request
+                error:
+                  type: idempotency_error
+                  code: idempotency_key_reused
+                  param: Idempotency-Key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "503":
+          description: The service is temporarily unavailable. Nothing was sent or created; retry later with the same Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: The service is temporarily unavailable. Nothing was sent or created; retry shortly.
+                error:
+                  type: api_error
+                  code: service_unavailable
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Save a beneficiary
+      tags:
+        - Beneficiaries
+      x-required-scopes:
+        - transfers:write
+  /api/v1/beneficiaries/{id}:
+    get:
+      operationId: getBeneficiary
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The beneficiary id (`ben_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The beneficiary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/Beneficiary"
+              example:
+                status: true
+                message: Beneficiary retrieved
+                data:
+                  id: ben_01J8Z5X7Q9K2M4N6P8R0S2T4W7
+                  object: beneficiary
+                  livemode: false
+                  bank_code: "058"
+                  bank_name: Guaranty Trust Bank
+                  account_number: "0123456789"
+                  account_name: ADA VENDOR ENTERPRISES
+                  nickname: Office rent
+                  source: transfer
+                  last_paid_at: 2026-09-24T18:04:12.000Z
+                  created_at: 2026-09-24T18:00:00.000Z
+                  updated_at: 2026-09-24T18:04:12.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Retrieve a beneficiary
+      tags:
+        - Beneficiaries
+      x-required-scopes:
+        - transfers:read
+      description: Retrieve a beneficiary by id (`ben_…`).
+    patch:
+      description: "Set or clear a beneficiary’s nickname. Account details can’t be changed: delete the beneficiary and save the new account."
+      operationId: updateBeneficiary
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The beneficiary id (`ben_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBeneficiaryDto"
+            example:
+              nickname: Landlord
+      responses:
+        "200":
+          description: The updated beneficiary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/Beneficiary"
+              example:
+                status: true
+                message: Beneficiary updated
+                data:
+                  id: ben_01J8Z5X7Q9K2M4N6P8R0S2T4W7
+                  object: beneficiary
+                  livemode: false
+                  bank_code: "058"
+                  bank_name: Guaranty Trust Bank
+                  account_number: "0123456789"
+                  account_name: ADA VENDOR ENTERPRISES
+                  nickname: Office rent
+                  source: transfer
+                  last_paid_at: 2026-09-24T18:04:12.000Z
+                  created_at: 2026-09-24T18:00:00.000Z
+                  updated_at: 2026-09-24T18:04:12.000Z
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Update a beneficiary's nickname
+      tags:
+        - Beneficiaries
+      x-required-scopes:
+        - transfers:write
+    delete:
+      description: Delete a saved beneficiary. Transfers already sent are not affected. A later successful transfer to the same account saves it again.
+      operationId: deleteBeneficiary
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+          description: The beneficiary id (`ben_…`).
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Confirmation that the beneficiary was deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/DeletedObject"
+              example:
+                status: true
+                message: Webhook endpoint deleted
+                data:
+                  id: we_01J8Z5X7Q9K2M4N6P8R0S2T4VB
+                  object: webhook_endpoint
+                  deleted: true
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6"
+                error:
+                  type: not_found
+                  code: resource_missing
+                  param: id
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: Delete a beneficiary
+      tags:
+        - Beneficiaries
+      x-required-scopes:
+        - transfers:write
   /api/v1/settlements:
     get:
       operationId: listSettlements
@@ -4790,10 +7480,10 @@ paths:
                     trigger: scheduled
                     amount: 31480000
                     fee: 0
-                    transfer_fee: 1500
-                    transfer_fee_vat: 113
+                    transfer_fee: 2500
+                    transfer_fee_vat: 0
                     stamp_duty: 5000
-                    total_deducted: 31486613
+                    total_deducted: 31487500
                     reserve_retained: 0
                     currency: NGN
                     settlement_account:
@@ -4935,10 +7625,10 @@ paths:
                   trigger: scheduled
                   amount: 31480000
                   fee: 0
-                  transfer_fee: 1500
-                  transfer_fee_vat: 113
+                  transfer_fee: 2500
+                  transfer_fee_vat: 0
                   stamp_duty: 5000
-                  total_deducted: 31486613
+                  total_deducted: 31487500
                   reserve_retained: 0
                   currency: NGN
                   settlement_account:
@@ -5252,7 +7942,7 @@ paths:
                   payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6
                   reference: RFND-12345
                   amount: 1000000
-                  fee: 1500
+                  fee: 6613
                   currency: NGN
                   reason: Customer returned the item
                   status: processing
@@ -5464,7 +8154,7 @@ paths:
                     payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6
                     reference: RFND-12345
                     amount: 1000000
-                    fee: 1500
+                    fee: 6613
                     currency: NGN
                     reason: Customer returned the item
                     status: processing
@@ -5604,7 +8294,7 @@ paths:
                   payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6
                   reference: RFND-12345
                   amount: 1000000
-                  fee: 1500
+                  fee: 6613
                   currency: NGN
                   reason: Customer returned the item
                   status: processing
@@ -5755,7 +8445,7 @@ paths:
                   payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6
                   reference: RFND-12345
                   amount: 1000000
-                  fee: 1500
+                  fee: 6613
                   currency: NGN
                   reason: Customer returned the item
                   status: processing
@@ -12291,9 +14981,12 @@ paths:
               - transfer.succeeded
               - transfer.failed
               - transfer.reversed
+              - transfer_batch.processing
+              - transfer_batch.completed
               - settlement.created
               - settlement.completed
               - settlement.failed
+              - balance.funded
               - refund.created
               - refund.succeeded
               - refund.failed
@@ -12977,6 +15670,7 @@ paths:
                   held: 0
                   unapplied: 0
                   settling: 0
+                  reserved: 0
                   total: 36450000
                   settled_total: 120000000
         "400":
@@ -13109,6 +15803,15 @@ paths:
               - settlement_complete
               - settlement_release
               - split_allocation
+              - transfer_charge
+              - transfer_charge_release
+              - stamp_duty_charge
+              - stamp_duty_release
+              - settlement_charge
+              - settlement_charge_release
+              - settlement_stamp_duty
+              - settlement_stamp_duty_release
+              - balance_funding
           description: Only objects of this type.
         - name: source
           required: false
@@ -13384,6 +16087,123 @@ paths:
         **Test mode only** (`403 test_mode_only` with a live key). Simulate a transfer into one of your test virtual accounts, as a customer would make it.
 
         The transfer then flows through the same pipeline as live money: the payment moves to `succeeded` and webhooks are sent. A wrong amount into an exact-amount account is refused (`400 simulation_rejected`), as a real transfer would be. An account that is not `active` (for example a one-time account that already received its payment) is refused before anything is sent (`409 virtual_account_not_active`). A `202` only means the simulation was accepted; watch the payment or its events for the outcome.
+  /api/v1/sandbox/test-values:
+    get:
+      operationId: listSandboxTestValues
+      parameters:
+        - name: PletoPay-Version
+          in: header
+          description: Dated API version. Defaults to the version pinned on your organization.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The test values.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                  - data
+                properties:
+                  status:
+                    const: true
+                  message:
+                    type: string
+                    description: Human-readable outcome
+                    example: Request successful
+                  data:
+                    $ref: "#/components/schemas/SandboxTestValues"
+              example:
+                status: true
+                message: Sandbox test values retrieved
+                data:
+                  object: sandbox_test_values
+                  not_found_prefix: string
+                  recipient_accounts:
+                    - account_number: string
+                      outcome: string
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: amount must not be less than 1
+                error:
+                  type: invalid_request
+                  code: parameter_invalid
+                  param: amount
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Invalid API key
+                error:
+                  type: authentication_error
+                  code: invalid_api_key
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: You do not have permission to perform this action
+                error:
+                  type: permission_error
+                  code: insufficient_permissions
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: Too many requests. Retry after the indicated delay.
+                error:
+                  type: rate_limit_error
+                  code: rate_limited
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                status: false
+                message: An unexpected error occurred
+                error:
+                  type: api_error
+                  code: internal_error
+                request_id: req_01J8Z5X7Q9K2M4N6P8R0S2T4WE
+      security:
+        - secretKey: []
+      summary: List the sandbox test values (test mode only)
+      tags:
+        - Sandbox
+      x-required-scopes:
+        - payments:read
+      x-test-mode-only: true
+      description: |-
+        **Test mode only** (`403 test_mode_only` with a live key). Recipient account numbers that give a payout (or a refund) a fixed outcome in test mode, so you can test failures on purpose: declined, processing then succeeded, processing then failed, a timeout confirmed by a status check, and an account that is not found.
+
+        Use them as the recipient of a payout, or as `sender_account_number` when you simulate a transfer, to test what happens to a refund. Any other number succeeds.
 info:
   title: Pletopay API
   version: 2026-09-25
@@ -13420,6 +16240,10 @@ tags:
     description: Plans and recurring billing through invoices or dedicated accounts. There is no automatic debit.
   - name: Transfers
     description: Send money from your available balance to any Nigerian bank account, with name enquiry and a bank list.
+  - name: Beneficiaries
+    description: "Saved transfer recipients: saved automatically when a transfer succeeds, or added by you. Pay one with `beneficiary_id`."
+  - name: Bulk transfers
+    description: "Pay many accounts at once: add the rows, have every account checked, review the totals, then send. The whole cost is held when you submit."
   - name: Refunds
     description: Return money for a payment by bank transfer, fully or partially.
   - name: Settlements
@@ -13517,7 +16341,7 @@ components:
           type: number
           description: Amount in minor units (kobo). ₦50,000.00 = 5000000. Required when amount_rule is exact.
           example: 5000000
-          minimum: 1
+          minimum: 10000
         currency:
           type: string
           enum:
@@ -13717,9 +16541,9 @@ components:
       properties:
         amount:
           type: number
-          description: Amount in kobo
+          description: Amount in kobo (at least ₦100)
           example: 2500000
-          minimum: 100
+          minimum: 10000
         currency:
           type: string
           enum:
@@ -13734,6 +16558,10 @@ components:
           description: Shown on the recipient's statement (at most 50 characters)
         beneficiary:
           $ref: "#/components/schemas/BeneficiaryDto"
+        beneficiary_id:
+          type: string
+          example: ben_01JD3Q2Y4Z8X
+          description: A saved beneficiary to pay instead of `beneficiary` (give one of the two, not both). The account name is checked again; if it no longer matches the saved name, nothing is sent (`beneficiary_name_changed`).
         metadata:
           type: object
           additionalProperties:
@@ -13743,7 +16571,6 @@ components:
         - currency
         - reference
         - narration
-        - beneficiary
     NameEnquiryDto:
       type: object
       properties:
@@ -13756,6 +16583,123 @@ components:
       required:
         - bank_code
         - account_number
+    BatchItemDto:
+      type: object
+      properties:
+        bank_code:
+          type: string
+          example: "058"
+          description: Bank code from GET /api/v1/banks
+        account_number:
+          type: string
+          example: "0123456789"
+          description: 10-digit NUBAN account number
+        amount:
+          type: number
+          description: Amount in kobo (at least ₦100)
+          example: 2500000
+          minimum: 10000
+        narration:
+          type: string
+          maxLength: 50
+          description: Shown on the recipient's statement. Defaults to the batch name.
+        reference:
+          type: string
+          description: Your reference for this row, used as the transfer reference (unique per mode). Defaults to `<batch reference>-<row number>`.
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - bank_code
+        - account_number
+        - amount
+    CreateTransferBatchDto:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: November payroll
+        reference:
+          type: string
+          description: Your reference for the batch (unique per mode). Generated when omitted.
+        items:
+          description: The first rows (at most 1,000 per request). Add more with POST /transfer-batches/{id}/items.
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchItemDto"
+        validate:
+          type: boolean
+          description: Start validating straight away (no more rows can be added). Default false.
+        source:
+          type: string
+          enum:
+            - manual
+            - csv
+          description: "Dashboard only: how the rows were entered. Ignored for API keys."
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+    AddBatchItemsDto:
+      type: object
+      properties:
+        items:
+          description: At most 1,000 rows per request
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchItemDto"
+      required:
+        - items
+    UpdateBatchItemDto:
+      type: object
+      properties:
+        bank_code:
+          type: string
+          example: "058"
+        account_number:
+          type: string
+          example: "0123456789"
+        amount:
+          type: number
+          description: Amount in kobo (at least ₦100)
+        narration:
+          type: string
+          maxLength: 50
+        reference:
+          type: string
+    CreateBeneficiaryDto:
+      type: object
+      properties:
+        bank_code:
+          type: string
+          example: "058"
+          description: Bank code from GET /api/v1/banks
+        account_number:
+          type: string
+          example: "0123456789"
+          description: 10-digit NUBAN account number
+        nickname:
+          type: string
+          maxLength: 60
+          example: Office rent
+          description: Your own label for this recipient
+      required:
+        - bank_code
+        - account_number
+    UpdateBeneficiaryDto:
+      type: object
+      properties:
+        nickname:
+          type:
+            - string
+            - "null"
+          maxLength: 60
+          example: Office rent
+          description: Your own label for this recipient; null or an empty string clears it
+      required:
+        - nickname
     RefundDestinationDto:
       type: object
       properties:
@@ -13776,7 +16720,8 @@ components:
           description: The original payment (pay_…)
         amount:
           type: number
-          description: Amount in kobo; defaults to the full refundable amount (partial refunds allowed)
+          description: Amount in kobo (at least ₦100); defaults to the full refundable amount (partial refunds allowed)
+          minimum: 10000
         reason:
           type: string
           example: Customer returned the item
@@ -13799,8 +16744,9 @@ components:
       properties:
         amount:
           type: number
-          description: Amount in kobo
+          description: Amount in kobo (at least ₦100)
           example: 5000000
+          minimum: 10000
         currency:
           type: string
           enum:
@@ -13849,8 +16795,10 @@ components:
           description: Fixed amount in kobo. Omit and set min/max to let the customer choose.
         min_amount:
           type: number
+          minimum: 10000
         max_amount:
           type: number
+          minimum: 10000
         max_uses:
           type: number
           description: Stop accepting payments after this many
@@ -13985,8 +16933,9 @@ components:
           type: string
         amount:
           type: number
-          description: Amount per period in kobo
+          description: Amount per period in kobo (at least ₦100)
           example: 500000
+          minimum: 10000
         interval:
           type: string
           enum:
@@ -14115,9 +17064,12 @@ components:
               - transfer.succeeded
               - transfer.failed
               - transfer.reversed
+              - transfer_batch.processing
+              - transfer_batch.completed
               - settlement.created
               - settlement.completed
               - settlement.failed
+              - balance.funded
               - refund.created
               - refund.succeeded
               - refund.failed
@@ -14169,9 +17121,12 @@ components:
               - transfer.succeeded
               - transfer.failed
               - transfer.reversed
+              - transfer_batch.processing
+              - transfer_batch.completed
               - settlement.created
               - settlement.completed
               - settlement.failed
+              - balance.funded
               - refund.created
               - refund.succeeded
               - refund.failed
@@ -14214,6 +17169,14 @@ components:
           type: number
           description: Amount in kobo
           example: 5000000
+        sender_name:
+          type: string
+          description: Name of the simulated sender
+          example: ADA OBI
+        sender_account_number:
+          type: string
+          description: Account number of the simulated sender. Refunds go back to the sender, so a test value here (see the sandbox test values) lets you test refund outcomes.
+          example: "0100000003"
       required:
         - account_number
         - amount
@@ -14341,7 +17304,7 @@ components:
         account_name:
           type: string
           example: Ada Stores Ltd
-          description: Account name; payers see it prefixed by the business short name (e.g. "IPC/Ada Stores Ltd")
+          description: Account name payers see when they look up the account
         bank_name:
           type: string
           example: Example Bank
@@ -14639,6 +17602,68 @@ components:
           type: string
           format: date-time
       additionalProperties: false
+    Beneficiary:
+      description: A saved transfer recipient. Pay it with `beneficiary_id` on Create a transfer.
+      type: object
+      required:
+        - id
+        - object
+        - livemode
+        - bank_code
+        - bank_name
+        - account_number
+        - account_name
+        - nickname
+        - source
+        - last_paid_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          pattern: ^ben_[0-9A-HJKMNP-TV-Z]{26}$
+          example: ben_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+        object:
+          const: beneficiary
+        livemode:
+          type: boolean
+        bank_code:
+          type: string
+        bank_name:
+          type:
+            - string
+            - "null"
+          description: Bank name for display (null if the list of banks is unavailable)
+        account_number:
+          type: string
+          pattern: ^[0-9]{10}$
+        account_name:
+          type: string
+          description: The account name, as last resolved
+        nickname:
+          type:
+            - string
+            - "null"
+          maxLength: 60
+        source:
+          type: string
+          enum:
+            - manual
+            - transfer
+          description: "`transfer`: saved automatically by a successful transfer. `manual`: added by you."
+        last_paid_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+          description: When the latest successful transfer to this account completed
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      additionalProperties: false
     Transfer:
       description: Money sent from your available balance to a bank account.
       type: object
@@ -14649,6 +17674,8 @@ components:
         - reference
         - amount
         - fee
+        - transfer_charge
+        - stamp_duty
         - total_debit
         - currency
         - status
@@ -14675,7 +17702,13 @@ components:
           description: Minor units (kobo for NGN)
         fee:
           type: integer
-          description: Fees charged to you for this transfer (transfer fee, stamp duty, platform fee)
+          description: "Everything charged to you for this transfer: transfer_charge + stamp_duty"
+        transfer_charge:
+          type: integer
+          description: The transfer charge (a separate line in your balance history)
+        stamp_duty:
+          type: integer
+          description: Stamp duty on transfers of ₦10,000 or more (a separate line in your balance history)
         total_debit:
           type: integer
           description: amount + fee, debited from your available balance
@@ -14717,6 +17750,13 @@ components:
           additionalProperties: false
         narration:
           type: string
+        batch:
+          oneOf:
+            - type: "null"
+            - type: string
+              pattern: ^tb_[0-9A-HJKMNP-TV-Z]{26}$
+              example: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+              description: The bulk transfer this transfer was sent in
         session_id:
           type:
             - string
@@ -14737,6 +17777,251 @@ components:
           type:
             - string
             - "null"
+          format: date-time
+      additionalProperties: false
+    TransferBatch:
+      description: "A bulk transfer: many payouts checked, reviewed and sent together. Sent with `transfer_batch.processing` and `transfer_batch.completed`."
+      type: object
+      required:
+        - id
+        - object
+        - livemode
+        - reference
+        - name
+        - status
+        - source
+        - currency
+        - item_count
+        - counts
+        - total_amount
+        - total_fees
+        - total_debit
+        - reserved_amount
+        - failure_reason
+        - metadata
+        - created_at
+        - submitted_at
+        - completed_at
+        - cancelled_at
+      properties:
+        id:
+          type: string
+          pattern: ^tb_[0-9A-HJKMNP-TV-Z]{26}$
+          example: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+        object:
+          const: transfer_batch
+        livemode:
+          type: boolean
+        reference:
+          type: string
+        name:
+          type:
+            - string
+            - "null"
+        status:
+          type: string
+          enum:
+            - draft
+            - validating
+            - ready
+            - processing
+            - completed
+            - partially_completed
+            - failed
+            - cancelled
+          description: "draft: rows can be added. validating: accounts are being checked. ready: can be submitted. processing: held and being sent. completed / partially_completed / failed: every transfer is final."
+        source:
+          type: string
+          enum:
+            - api
+            - dashboard
+        currency:
+          type: string
+          enum:
+            - NGN
+        item_count:
+          type: integer
+          description: Rows, not counting removed ones
+        counts:
+          type: object
+          required:
+            - validating
+            - valid
+            - invalid
+            - removed
+            - queued
+            - processing
+            - succeeded
+            - failed
+            - reversed
+          properties:
+            validating:
+              type: integer
+            valid:
+              type: integer
+            invalid:
+              type: integer
+            removed:
+              type: integer
+            queued:
+              type: integer
+            processing:
+              type: integer
+            succeeded:
+              type: integer
+            failed:
+              type: integer
+            reversed:
+              type: integer
+          additionalProperties: false
+          description: Rows in each status
+        total_amount:
+          type: integer
+          description: Sum of the rows to send (not invalid or removed)
+        total_fees:
+          type: integer
+          description: Their transfer charges and stamp duty
+        total_debit:
+          type: integer
+          description: "total_amount + total_fees: what submit holds"
+        reserved_amount:
+          type: integer
+          description: What was held at submit (0 before)
+        failure_reason:
+          type:
+            - string
+            - "null"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          maxProperties: 50
+        created_at:
+          type: string
+          format: date-time
+        submitted_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        completed_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        cancelled_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+      additionalProperties: false
+    TransferBatchItem:
+      description: One row of a bulk transfer. Once sent, it takes its transfer’s status.
+      type: object
+      required:
+        - id
+        - object
+        - batch
+        - index
+        - status
+        - bank_code
+        - bank_name
+        - account_number
+        - account_name
+        - amount
+        - fee
+        - total_debit
+        - narration
+        - reference
+        - metadata
+        - error
+        - transfer
+        - created_at
+      properties:
+        id:
+          type: string
+          pattern: ^tbi_[0-9A-HJKMNP-TV-Z]{26}$
+          example: tbi_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+        object:
+          const: transfer_batch_item
+        batch:
+          type: string
+          pattern: ^tb_[0-9A-HJKMNP-TV-Z]{26}$
+          example: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+        index:
+          type: integer
+          description: Row number, in upload order (from 1)
+        status:
+          type: string
+          enum:
+            - validating
+            - valid
+            - invalid
+            - removed
+            - queued
+            - processing
+            - succeeded
+            - failed
+            - reversed
+          description: Once sent, the row takes its transfer’s status.
+        bank_code:
+          type: string
+        bank_name:
+          type:
+            - string
+            - "null"
+          description: Bank name for display (null if the list of banks is unavailable)
+        account_number:
+          type: string
+          pattern: ^[0-9]{10}$
+          example: "0123456789"
+        account_name:
+          type:
+            - string
+            - "null"
+          description: The account holder’s name (name enquiry)
+        amount:
+          type: integer
+          description: Minor units (kobo for NGN)
+        fee:
+          type: integer
+          description: Transfer charge + stamp duty for this row
+        total_debit:
+          type: integer
+          description: Minor units (kobo for NGN)
+        narration:
+          type: string
+        reference:
+          type: string
+          description: Becomes the transfer’s reference
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          maxProperties: 50
+        error:
+          oneOf:
+            - type: "null"
+            - type: object
+              required:
+                - code
+                - message
+              properties:
+                code:
+                  type: string
+                message:
+                  type: string
+              additionalProperties: false
+          description: Why the row is invalid or was not sent
+        transfer:
+          oneOf:
+            - type: "null"
+            - type: string
+              pattern: ^trf_[0-9A-HJKMNP-TV-Z]{26}$
+              example: trf_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+          description: The transfer, once the row is sent
+        created_at:
+          type: string
           format: date-time
       additionalProperties: false
     Refund:
@@ -15870,6 +19155,7 @@ components:
                   - held
                   - unapplied
                   - settling
+                  - reserved
               opening:
                 type: integer
               credits:
@@ -15925,6 +19211,7 @@ components:
         - held
         - unapplied
         - settling
+        - reserved
         - total
         - settled_total
       properties:
@@ -15951,6 +19238,9 @@ components:
         settling:
           type: integer
           description: Minor units (kobo for NGN)
+        reserved:
+          type: integer
+          description: Held for bulk transfers that are being sent
         total:
           type: integer
           description: Minor units (kobo for NGN)
@@ -15996,7 +19286,7 @@ components:
           type: object
           additionalProperties:
             type: integer
-          description: "Signed change per balance: available, pending, held, unapplied, settling"
+          description: "Signed change per balance: available, pending, held, unapplied, settling, reserved"
         source:
           oneOf:
             - type: "null"
@@ -16010,6 +19300,82 @@ components:
                 id:
                   type: string
               additionalProperties: false
+        created_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    BalanceFunding:
+      description: Money you sent to your own funding account to top up your balance. Sent with the `balance.funded` event once it is available.
+      type: object
+      required:
+        - id
+        - object
+        - livemode
+        - status
+        - currency
+        - amount
+        - fee
+        - stamp_duty
+        - net_amount
+        - sender
+        - available_at
+        - created_at
+      properties:
+        id:
+          type: string
+          pattern: ^fnd_[0-9A-HJKMNP-TV-Z]{26}$
+          example: fnd_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+        object:
+          const: balance_funding
+        livemode:
+          type: boolean
+        status:
+          type: string
+          enum:
+            - pending
+            - available
+          description: "pending: received, not yet in your available balance. available: added to it."
+        currency:
+          type: string
+          enum:
+            - NGN
+        amount:
+          type: integer
+          description: What you sent (minor units)
+        fee:
+          type: integer
+          description: Transfer charge on the top-up
+        stamp_duty:
+          type: integer
+          description: Stamp duty (₦10,000 and above)
+        net_amount:
+          type: integer
+          description: "Added to your balance: amount − fee − stamp_duty"
+        sender:
+          oneOf:
+            - type: "null"
+            - type: object
+              required:
+                - name
+                - account_number
+                - bank_name
+              properties:
+                name:
+                  type:
+                    - string
+                    - "null"
+                account_number:
+                  type:
+                    - string
+                    - "null"
+                bank_name:
+                  type:
+                    - string
+                    - "null"
+              additionalProperties: false
+        available_at:
+          type: string
+          format: date-time
         created_at:
           type: string
           format: date-time
@@ -16275,6 +19641,33 @@ components:
           type: integer
           description: Minor units (kobo for NGN)
       additionalProperties: false
+    SandboxTestValues:
+      type: object
+      required:
+        - object
+        - not_found_prefix
+        - recipient_accounts
+      properties:
+        object:
+          const: sandbox_test_values
+        not_found_prefix:
+          type: string
+          description: Recipient account numbers starting with this are never found
+        recipient_accounts:
+          type: array
+          description: Payout and refund recipient account numbers with a fixed outcome in test mode
+          items:
+            type: object
+            required:
+              - account_number
+              - outcome
+            properties:
+              account_number:
+                type: string
+              outcome:
+                type: string
+            additionalProperties: false
+      additionalProperties: false
     Settlement:
       description: A payout of available balance to a settlement account.
       type: object
@@ -16333,10 +19726,11 @@ components:
           description: Platform settlement fee
         transfer_fee:
           type: integer
-          description: Transfer fee (when passed through)
+          description: The settlement transfer charge
         transfer_fee_vat:
           type: integer
-          description: 7.5% VAT on the transfer fee (when passed through)
+          description: "Deprecated: always 0. Use transfer_fee."
+          deprecated: true
         stamp_duty:
           type: integer
           description: Minor units (kobo for NGN)
@@ -17046,6 +20440,76 @@ components:
             object:
               $ref: "#/components/schemas/Transfer"
           additionalProperties: false
+    Event_transfer_batch_processing:
+      type: object
+      required:
+        - id
+        - object
+        - type
+        - api_version
+        - livemode
+        - created_at
+        - data
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: ^evt_[0-9A-HJKMNP-TV-Z]{26}$
+          example: evt_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+        object:
+          const: event
+        type:
+          const: transfer_batch.processing
+        api_version:
+          type: string
+        livemode:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required:
+            - object
+          properties:
+            object:
+              $ref: "#/components/schemas/TransferBatch"
+          additionalProperties: false
+    Event_transfer_batch_completed:
+      type: object
+      required:
+        - id
+        - object
+        - type
+        - api_version
+        - livemode
+        - created_at
+        - data
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: ^evt_[0-9A-HJKMNP-TV-Z]{26}$
+          example: evt_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+        object:
+          const: event
+        type:
+          const: transfer_batch.completed
+        api_version:
+          type: string
+        livemode:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required:
+            - object
+          properties:
+            object:
+              $ref: "#/components/schemas/TransferBatch"
+          additionalProperties: false
     Event_settlement_created:
       type: object
       required:
@@ -17150,6 +20614,41 @@ components:
           properties:
             object:
               $ref: "#/components/schemas/Settlement"
+          additionalProperties: false
+    Event_balance_funded:
+      type: object
+      required:
+        - id
+        - object
+        - type
+        - api_version
+        - livemode
+        - created_at
+        - data
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: ^evt_[0-9A-HJKMNP-TV-Z]{26}$
+          example: evt_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+        object:
+          const: event
+        type:
+          const: balance.funded
+        api_version:
+          type: string
+        livemode:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        data:
+          type: object
+          required:
+            - object
+          properties:
+            object:
+              $ref: "#/components/schemas/BalanceFunding"
           additionalProperties: false
     Event_refund_created:
       type: object
@@ -18904,8 +22403,10 @@ webhooks:
                   livemode: false
                   reference: PAYOUT-2026-0001
                   amount: 2500000
-                  fee: 1500
-                  total_debit: 2501500
+                  fee: 7000
+                  transfer_charge: 2000
+                  stamp_duty: 5000
+                  total_debit: 2507000
                   currency: NGN
                   status: pending
                   beneficiary:
@@ -18986,8 +22487,10 @@ webhooks:
                   livemode: false
                   reference: PAYOUT-2026-0001
                   amount: 2500000
-                  fee: 1500
-                  total_debit: 2501500
+                  fee: 7000
+                  transfer_charge: 2000
+                  stamp_duty: 5000
+                  total_debit: 2507000
                   currency: NGN
                   status: processing
                   beneficiary:
@@ -19068,8 +22571,10 @@ webhooks:
                   livemode: false
                   reference: PAYOUT-2026-0001
                   amount: 2500000
-                  fee: 1500
-                  total_debit: 2501500
+                  fee: 7000
+                  transfer_charge: 2000
+                  stamp_duty: 5000
+                  total_debit: 2507000
                   currency: NGN
                   status: processing
                   beneficiary:
@@ -19150,8 +22655,10 @@ webhooks:
                   livemode: false
                   reference: PAYOUT-2026-0001
                   amount: 2500000
-                  fee: 1500
-                  total_debit: 2501500
+                  fee: 7000
+                  transfer_charge: 2000
+                  stamp_duty: 5000
+                  total_debit: 2507000
                   currency: NGN
                   status: processing
                   beneficiary:
@@ -19232,8 +22739,10 @@ webhooks:
                   livemode: false
                   reference: PAYOUT-2026-0001
                   amount: 2500000
-                  fee: 1500
-                  total_debit: 2501500
+                  fee: 7000
+                  transfer_charge: 2000
+                  stamp_duty: 5000
+                  total_debit: 2507000
                   currency: NGN
                   status: processing
                   beneficiary:
@@ -19254,6 +22763,186 @@ webhooks:
       summary: transfer.reversed
       description: |-
         A succeeded transfer was reversed.
+
+        Verify `X-PletoPay-Signature` against the raw body, de-duplicate on `X-PletoPay-Event-ID`, and respond 2xx within 10 seconds.
+      parameters:
+        - name: X-PletoPay-Signature
+          in: header
+          required: true
+          description: '`t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`. Reject timestamps older than 5 minutes.'
+          schema:
+            type: string
+            example: t=1727200000,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+        - name: X-PletoPay-Timestamp
+          in: header
+          required: true
+          description: The same `t` as in the signature (unix seconds).
+          schema:
+            type: string
+            example: "1727200000"
+        - name: X-PletoPay-Event-ID
+          in: header
+          required: true
+          description: "The event id (`evt_…`). De-duplicate on it: delivery is at least once."
+          schema:
+            type: string
+            example: evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB
+        - name: X-PletoPay-Event-Type
+          in: header
+          required: true
+          description: The event type, e.g. `payment.succeeded`.
+          schema:
+            type: string
+            example: payment.succeeded
+        - name: X-PletoPay-Delivery-ID
+          in: header
+          required: true
+          description: The delivery (`whd_…`); the same across retries of one delivery.
+          schema:
+            type: string
+            example: whd_01J8Z5X7Q9K2M4N6P8R0S2T4WA
+  transfer_batch.processing:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Event_transfer_batch_processing"
+            example:
+              id: evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB
+              object: event
+              type: transfer_batch.processing
+              api_version: 2026-09-24
+              livemode: false
+              created_at: 2026-09-24T18:04:12.000Z
+              data:
+                object:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+      responses:
+        "200":
+          description: Acknowledged. Any 2xx stops retries; anything else is retried.
+      summary: transfer_batch.processing
+      description: |-
+        A bulk transfer was submitted: its whole cost is held and its rows are being sent.
+
+        Verify `X-PletoPay-Signature` against the raw body, de-duplicate on `X-PletoPay-Event-ID`, and respond 2xx within 10 seconds.
+      parameters:
+        - name: X-PletoPay-Signature
+          in: header
+          required: true
+          description: '`t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`. Reject timestamps older than 5 minutes.'
+          schema:
+            type: string
+            example: t=1727200000,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+        - name: X-PletoPay-Timestamp
+          in: header
+          required: true
+          description: The same `t` as in the signature (unix seconds).
+          schema:
+            type: string
+            example: "1727200000"
+        - name: X-PletoPay-Event-ID
+          in: header
+          required: true
+          description: "The event id (`evt_…`). De-duplicate on it: delivery is at least once."
+          schema:
+            type: string
+            example: evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB
+        - name: X-PletoPay-Event-Type
+          in: header
+          required: true
+          description: The event type, e.g. `payment.succeeded`.
+          schema:
+            type: string
+            example: payment.succeeded
+        - name: X-PletoPay-Delivery-ID
+          in: header
+          required: true
+          description: The delivery (`whd_…`); the same across retries of one delivery.
+          schema:
+            type: string
+            example: whd_01J8Z5X7Q9K2M4N6P8R0S2T4WA
+  transfer_batch.completed:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Event_transfer_batch_completed"
+            example:
+              id: evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB
+              object: event
+              type: transfer_batch.completed
+              api_version: 2026-09-24
+              livemode: false
+              created_at: 2026-09-24T18:04:12.000Z
+              data:
+                object:
+                  id: tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: transfer_batch
+                  livemode: false
+                  reference: string
+                  name: string
+                  status: draft
+                  source: api
+                  currency: NGN
+                  item_count: 0
+                  counts:
+                    validating: 0
+                    valid: 0
+                    invalid: 0
+                    removed: 0
+                    queued: 0
+                    processing: 0
+                    succeeded: 0
+                    failed: 0
+                    reversed: 0
+                  total_amount: 0
+                  total_fees: 0
+                  total_debit: 0
+                  reserved_amount: 0
+                  failure_reason: string
+                  metadata: {}
+                  created_at: 2026-09-24T18:00:00.000Z
+                  submitted_at: 2026-09-24T18:00:00.000Z
+                  completed_at: 2026-09-24T18:00:00.000Z
+                  cancelled_at: 2026-09-24T18:00:00.000Z
+      responses:
+        "200":
+          description: Acknowledged. Any 2xx stops retries; anything else is retried.
+      summary: transfer_batch.completed
+      description: |-
+        Every transfer in a bulk transfer is final. Anything left of the hold was returned to your available balance.
 
         Verify `X-PletoPay-Signature` against the raw body, de-duplicate on `X-PletoPay-Event-ID`, and respond 2xx within 10 seconds.
       parameters:
@@ -19317,10 +23006,10 @@ webhooks:
                   trigger: scheduled
                   amount: 31480000
                   fee: 0
-                  transfer_fee: 1500
-                  transfer_fee_vat: 113
+                  transfer_fee: 2500
+                  transfer_fee_vat: 0
                   stamp_duty: 5000
-                  total_deducted: 31486613
+                  total_deducted: 31487500
                   reserve_retained: 0
                   currency: NGN
                   settlement_account:
@@ -19405,10 +23094,10 @@ webhooks:
                   trigger: scheduled
                   amount: 31480000
                   fee: 0
-                  transfer_fee: 1500
-                  transfer_fee_vat: 113
+                  transfer_fee: 2500
+                  transfer_fee_vat: 0
                   stamp_duty: 5000
-                  total_deducted: 31486613
+                  total_deducted: 31487500
                   reserve_retained: 0
                   currency: NGN
                   settlement_account:
@@ -19493,10 +23182,10 @@ webhooks:
                   trigger: scheduled
                   amount: 31480000
                   fee: 0
-                  transfer_fee: 1500
-                  transfer_fee_vat: 113
+                  transfer_fee: 2500
+                  transfer_fee_vat: 0
                   stamp_duty: 5000
-                  total_deducted: 31486613
+                  total_deducted: 31487500
                   reserve_retained: 0
                   currency: NGN
                   settlement_account:
@@ -19518,6 +23207,82 @@ webhooks:
       summary: settlement.failed
       description: |-
         A settlement payout failed. The funds were returned to your available balance.
+
+        Verify `X-PletoPay-Signature` against the raw body, de-duplicate on `X-PletoPay-Event-ID`, and respond 2xx within 10 seconds.
+      parameters:
+        - name: X-PletoPay-Signature
+          in: header
+          required: true
+          description: '`t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`. Reject timestamps older than 5 minutes.'
+          schema:
+            type: string
+            example: t=1727200000,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+        - name: X-PletoPay-Timestamp
+          in: header
+          required: true
+          description: The same `t` as in the signature (unix seconds).
+          schema:
+            type: string
+            example: "1727200000"
+        - name: X-PletoPay-Event-ID
+          in: header
+          required: true
+          description: "The event id (`evt_…`). De-duplicate on it: delivery is at least once."
+          schema:
+            type: string
+            example: evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB
+        - name: X-PletoPay-Event-Type
+          in: header
+          required: true
+          description: The event type, e.g. `payment.succeeded`.
+          schema:
+            type: string
+            example: payment.succeeded
+        - name: X-PletoPay-Delivery-ID
+          in: header
+          required: true
+          description: The delivery (`whd_…`); the same across retries of one delivery.
+          schema:
+            type: string
+            example: whd_01J8Z5X7Q9K2M4N6P8R0S2T4WA
+  balance.funded:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Event_balance_funded"
+            example:
+              id: evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB
+              object: event
+              type: balance.funded
+              api_version: 2026-09-24
+              livemode: false
+              created_at: 2026-09-24T18:04:12.000Z
+              data:
+                object:
+                  id: fnd_01J8Z5X7Q9K2M4N6P8R0S2T4V6
+                  object: balance_funding
+                  livemode: false
+                  status: pending
+                  currency: NGN
+                  amount: 0
+                  fee: 0
+                  stamp_duty: 0
+                  net_amount: 0
+                  sender:
+                    name: string
+                    account_number: string
+                    bank_name: string
+                  available_at: 2026-09-24T18:00:00.000Z
+                  created_at: 2026-09-24T18:00:00.000Z
+      responses:
+        "200":
+          description: Acknowledged. Any 2xx stops retries; anything else is retried.
+      summary: balance.funded
+      description: |-
+        Money you sent to your balance funding account is now in your available balance, less the transfer charges.
 
         Verify `X-PletoPay-Signature` against the raw body, de-duplicate on `X-PletoPay-Event-ID`, and respond 2xx within 10 seconds.
       parameters:
@@ -19579,7 +23344,7 @@ webhooks:
                   payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6
                   reference: RFND-12345
                   amount: 1000000
-                  fee: 1500
+                  fee: 6613
                   currency: NGN
                   reason: Customer returned the item
                   status: pending
@@ -19662,7 +23427,7 @@ webhooks:
                   payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6
                   reference: RFND-12345
                   amount: 1000000
-                  fee: 1500
+                  fee: 6613
                   currency: NGN
                   reason: Customer returned the item
                   status: processing
@@ -19745,7 +23510,7 @@ webhooks:
                   payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6
                   reference: RFND-12345
                   amount: 1000000
-                  fee: 1500
+                  fee: 6613
                   currency: NGN
                   reason: Customer returned the item
                   status: processing
@@ -21098,6 +24863,8 @@ x-tagGroups:
   - name: Move money
     tags:
       - Transfers
+      - Beneficiaries
+      - Bulk transfers
       - Refunds
       - Settlements
       - Subaccounts & splits
@@ -21175,6 +24942,22 @@ x-error-codes:
     status: 400
     type: invalid_request
     when: Name enquiry could not resolve the account
+  - code: batch_items_invalid
+    status: 400
+    type: invalid_request
+    when: Some rows of a bulk transfer chunk are invalid; none were added (`details.errors` lists each row, field and reason)
+  - code: batch_chunk_too_large
+    status: 400
+    type: invalid_request
+    when: Too many rows in one request (at most 1,000); add the rest with POST /api/v1/transfer-batches/{id}/items
+  - code: batch_has_no_items
+    status: 400
+    type: invalid_request
+    when: The bulk transfer has no rows to validate
+  - code: batch_has_no_valid_items
+    status: 400
+    type: invalid_request
+    when: None of the bulk transfer rows can be sent; fix or remove the invalid rows first
   - code: insufficient_funds
     status: 400
     type: invalid_request
@@ -21243,6 +25026,10 @@ x-error-codes:
     status: 400
     type: invalid_request
     when: Payment-link amounts are inconsistent, or a customer amount is outside the range
+  - code: split_exceeds_amount
+    status: 400
+    type: invalid_request
+    when: The amount is below what the split rule pays out in fixed amounts, so you'd keep nothing
   - code: invalid_expiry
     status: 400
     type: invalid_request
@@ -21287,6 +25074,10 @@ x-error-codes:
     status: 403
     type: permission_error
     when: Money-out isn't enabled for this organization and mode
+  - code: batch_validation_limit
+    status: 403
+    type: permission_error
+    when: Bulk transfers can check at most twice your daily transfer count in rows per day; contact support to raise it
   - code: funds_on_hold
     status: 403
     type: permission_error
@@ -21303,6 +25094,10 @@ x-error-codes:
     status: 403
     type: permission_error
     when: A sandbox endpoint was called with a live key
+  - code: ip_address_not_allowed
+    status: 403
+    type: permission_error
+    when: The secret key's IP allowlist for this mode has entries and the request came from an address outside it
   - code: risk_limit_exceeded
     status: 403
     type: permission_error
@@ -21339,6 +25134,26 @@ x-error-codes:
     status: 409
     type: conflict
     when: A customer with this email exists
+  - code: batch_not_editable
+    status: 409
+    type: conflict
+    when: The bulk transfer can no longer be changed this way (rows are added only to a draft; nothing changes after submit)
+  - code: batch_not_ready
+    status: 409
+    type: conflict
+    when: The bulk transfer is not ready to submit (validate it first, or wait for validation)
+  - code: batch_not_cancellable
+    status: 409
+    type: conflict
+    when: A submitted bulk transfer runs to the end and cannot be cancelled
+  - code: beneficiary_exists
+    status: 409
+    type: conflict
+    when: This bank account is already saved as a beneficiary in this mode
+  - code: beneficiary_name_changed
+    status: 409
+    type: conflict
+    when: The saved beneficiary's account name no longer matches the account; nothing was sent. Check the account and save it again
   - code: dedicated_account_limit
     status: 409
     type: conflict

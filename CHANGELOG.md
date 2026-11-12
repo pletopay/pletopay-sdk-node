@@ -2,6 +2,17 @@
 
 All notable changes to `@pletopay/node` are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- `beneficiaries`: saved transfer recipients (`create`, `list` with `q` search, `retrieve`, `update` for the nickname, `delete`). The recipient of every successful transfer is saved automatically. Types `SavedBeneficiary`, `BeneficiaryCreateParams`, `BeneficiaryUpdateParams` and `BeneficiaryListParams` (`Beneficiary` is still the account given inline on a transfer).
+- `transfers.create` accepts `beneficiary_id` instead of `beneficiary`. New error codes `beneficiary_exists` and `beneficiary_name_changed`.
+- `transferBatches`: bulk transfers (`create`, `list`, `retrieve`, `listItems`, `addItems`, `updateItem`, `removeItem`, `validate`, `submit`, `cancel`), with the types `TransferBatch`, `TransferBatchItem`, their params and statuses.
+- `sandbox.testValues()`: the recipient account numbers that give a test-mode payout or refund a fixed outcome (test mode only).
+- `q` on `transfers.list`: search by transfer id, reference, account number or session id.
+- Event types `balance.funded`, `transfer_batch.processing` and `transfer_batch.completed` in `EVENT_TYPES`.
+
 ## [1.1.0] - 2026-11-10
 
 ### Fixed

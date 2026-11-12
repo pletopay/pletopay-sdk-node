@@ -1,5 +1,6 @@
 export { Balance } from './balance';
 export { Banks } from './banks';
+export { Beneficiaries } from './beneficiaries';
 export { Checkout, CheckoutSessions } from './checkout';
 export { Customers } from './customers';
 export { Events } from './events';
@@ -16,6 +17,7 @@ export { SplitRules } from './split-rules';
 export { Subaccounts } from './subaccounts';
 export { Subscriptions } from './subscriptions';
 export { Transactions } from './transactions';
+export { TransferBatches } from './transfer-batches';
 export { Transfers } from './transfers';
 export { VirtualAccounts } from './virtual-accounts';
 export { WebhookEndpoints } from './webhook-endpoints';

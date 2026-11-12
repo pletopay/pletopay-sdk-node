@@ -5,7 +5,7 @@ Generated from the Pletopay OpenAPI contract (`Pletopay API`, version `2026-09-2
 ## Contents
 
 - **Accept payments**: [Payments](#payments) · [Virtual accounts](#virtual-accounts) · [Customers](#customers) · [Checkout](#checkout) · [Payment links](#payment-links) · [Invoices](#invoices) · [Subscriptions](#subscriptions)
-- **Move money**: [Transfers](#transfers) · [Refunds](#refunds) · [Settlements](#settlements) · [Subaccounts & splits](#subaccounts-splits)
+- **Move money**: [Transfers](#transfers) · [Beneficiaries](#beneficiaries) · [Bulk transfers](#bulk-transfers) · [Refunds](#refunds) · [Settlements](#settlements) · [Subaccounts & splits](#subaccounts-splits)
 - **Account**: [Balance](#balance) · [Reports](#reports) · [Risk](#risk)
 - **Developers**: [Webhooks](#webhooks) · [Sandbox](#sandbox)
 - [Object schemas](#object-schemas)
@@ -32,7 +32,7 @@ The payment becomes `succeeded` only when the credit is confirmed. Never treat a
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `amount` | number | no | Amount in minor units (kobo). ₦50,000.00 = 5000000. Required when amount_rule is exact.. min 1 |
+| `amount` | number | no | Amount in minor units (kobo). ₦50,000.00 = 5000000. Required when amount_rule is exact.. min 10000 |
 | `currency` | `NGN` | **yes** |  |
 | `reference` | string | **yes** | Your unique reference for this payment (e.g. order id) |
 | `amount_rule` | `exact` · `any` | no | exact: transfers of any other amount are rejected. any: accept whatever is sent.. default `"exact"` |
@@ -346,7 +346,7 @@ Create a checkout session, then either redirect your customer to its `url` (host
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `amount` | number | **yes** | Amount in kobo |
+| `amount` | number | **yes** | Amount in kobo (at least ₦100). min 10000 |
 | `currency` | `NGN` | **yes** |  |
 | `reference` | string | no | Your reference for this session, unique per mode (409 duplicate_reference if reused) |
 | `description` | string | no | Shown to the customer |
@@ -443,8 +443,8 @@ Create a reusable payment link: a hosted page you can share anywhere. Each visit
 | `name` | string | **yes** |  |
 | `description` | string | no |  |
 | `amount` | number | no | Fixed amount in kobo. Omit and set min/max to let the customer choose. |
-| `min_amount` | number | no |  |
-| `max_amount` | number | no |  |
+| `min_amount` | number | no | min 10000 |
+| `max_amount` | number | no | min 10000 |
 | `max_uses` | number | no | Stop accepting payments after this many |
 | `success_url` | string | no |  |
 | `cancel_url` | string | no |  |
@@ -700,7 +700,7 @@ Create a plan: an amount billed every `interval_count` × `interval` (for exampl
 | --- | --- | --- | --- |
 | `name` | string | **yes** |  |
 | `description` | string | no |  |
-| `amount` | number | **yes** | Amount per period in kobo |
+| `amount` | number | **yes** | Amount per period in kobo (at least ₦100). min 10000 |
 | `interval` | `day` · `week` · `month` · `year` | **yes** |  |
 | `interval_count` | number | no | Bill every N intervals (e.g. 3 months). default `1` |
 | `metadata` | map of string to string | no |  |
@@ -871,7 +871,9 @@ Send money from your available balance to any Nigerian bank account, with name e
 
 Send money from your available balance to any Nigerian bank account. **`Idempotency-Key` is required**: if the request times out, retry with the same key and you will get the original transfer, never a second one.
 
-Resolve the account first with `POST /api/v1/transfers/name-enquiry`. The amount plus fees (`total_debit`) is reserved from your available balance immediately (`400 insufficient_funds` otherwise). The minimum transfer is ₦10.00 (`400 amount_below_minimum`) and `narration` is limited to 50 characters.
+Give the recipient as `beneficiary` (bank code and account number), or pay a saved beneficiary with `beneficiary_id` (`ben_…`); not both. Resolve a new account first with `POST /api/v1/transfers/name-enquiry`. The account name is checked on every transfer; for a saved beneficiary whose account no longer carries the saved name, nothing is sent (`409 beneficiary_name_changed`). The recipient of every successful transfer is saved as a beneficiary.
+
+The amount plus fees (`total_debit`) is reserved from your available balance immediately (`400 insufficient_funds` otherwise). The minimum transfer is ₦100.00 (`400 amount_below_minimum`) and `narration` is limited to 50 characters.
 
 A transfer whose outcome isn’t known yet stays `processing`; it is never reported `failed` until it is confirmed. Listen for `transfer.succeeded` / `transfer.failed`. A failed transfer releases the reserved funds.
 
@@ -881,11 +883,12 @@ Money-out can be refused by your risk limits (`403 risk_limit_exceeded`), an ope
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `amount` | number | **yes** | Amount in kobo. min 100 |
+| `amount` | number | **yes** | Amount in kobo (at least ₦100). min 10000 |
 | `currency` | `NGN` | **yes** |  |
 | `reference` | string | **yes** |  |
 | `narration` | string | **yes** | Shown on the recipient's statement (at most 50 characters). max length 50 |
-| `beneficiary` | BeneficiaryDto | **yes** |  |
+| `beneficiary` | BeneficiaryDto | no |  |
+| `beneficiary_id` | string | no | A saved beneficiary to pay instead of `beneficiary` (give one of the two, not both). The account name is checked again; if it no longer matches the saved name, nothing is sent (`beneficiary_name_changed`). |
 | `metadata` | map of string to string | no |  |
 
 | Field | Type | Required | Description |
@@ -928,6 +931,7 @@ List transfers. Filter by `status` and creation time.
 | `ending_before` | string | no | Cursor: return objects created after this object id (newer) |
 | `created` | `{ gt?, gte?, lt?, lte? }` (ISO-8601 or Date) | no | Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z |
 | `status` | `pending` · `processing` · `succeeded` · `failed` · `reversed` | no | Only objects with this status. |
+| `q` | string | no | Search: a transfer id (trf_…, exact), your reference (starts with), the beneficiary account number (starts with), or the session id (exact). max length 100 |
 
 **Returns** (HTTP 200): [Transfer[]](#transfer) — A page of transfers, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
 
@@ -983,6 +987,316 @@ List the banks you can send transfers to, with the `code` to use as `bank_code`.
 
 **Returns** (HTTP 200): [Bank[]](#bank) — All supported banks (not paginated).
 
+## Beneficiaries
+
+Saved transfer recipients: saved automatically when a transfer succeeds, or added by you. Pay one with `beneficiary_id`.
+
+### `pletopay.beneficiaries.list(params?, options?)`
+
+`GET /api/v1/beneficiaries` · operation `listBeneficiaries`
+
+List saved beneficiaries. The recipient of every successful transfer is saved automatically (`source: transfer`), and you can save accounts yourself (`source: manual`). Search with `q`: an id, the start of an account number, or part of the account name or nickname.
+
+**Query parameters** (`params`):
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `limit` | number | no | Number of objects to return. min 1, max 100, default `10` |
+| `starting_after` | string | no | Cursor: return objects created before this object id (older) |
+| `ending_before` | string | no | Cursor: return objects created after this object id (newer) |
+| `created` | `{ gt?, gte?, lt?, lte? }` (ISO-8601 or Date) | no | Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z |
+| `q` | string | no | Search: a beneficiary id (ben_…, exact), an account number (starts with), or part of the account name or nickname. max length 100 |
+
+**Returns** (HTTP 200): [Beneficiary[]](#beneficiary) — A page of beneficiaries, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
+
+### `pletopay.beneficiaries.create(params, options?)`
+
+`POST /api/v1/beneficiaries` · operation `createBeneficiary` · Idempotency-Key accepted (generated when omitted)
+
+Save a bank account so you can pay it with `beneficiary_id` instead of sending account details each time. The account name is resolved first (`400 account_not_resolved` if it can’t be). An account already saved in this mode returns `409 beneficiary_exists`. Up to 5,000 beneficiaries per mode.
+
+**Request fields** (`CreateBeneficiary`):
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `bank_code` | string | **yes** | Bank code from GET /api/v1/banks |
+| `account_number` | string | **yes** | 10-digit NUBAN account number |
+| `nickname` | string | no | Your own label for this recipient. max length 60 |
+
+**Returns** (HTTP 201): [Beneficiary](#beneficiary) — The new beneficiary.
+
+**Example**
+
+```ts
+const result = await pletopay.beneficiaries.create({
+    "bank_code": "058",
+    "account_number": "0123456789",
+    "nickname": "Office rent"
+  });
+```
+
+### `pletopay.beneficiaries.retrieve(id, options?)`
+
+`GET /api/v1/beneficiaries/{id}` · operation `getBeneficiary`
+
+Retrieve a beneficiary by id (`ben_…`).
+
+**Path arguments:** `id` (The beneficiary id (`ben_…`).)
+
+**Returns** (HTTP 200): [Beneficiary](#beneficiary) — The beneficiary.
+
+### `pletopay.beneficiaries.update(id, params, options?)`
+
+`PATCH /api/v1/beneficiaries/{id}` · operation `updateBeneficiary`
+
+Set or clear a beneficiary’s nickname. Account details can’t be changed: delete the beneficiary and save the new account.
+
+**Path arguments:** `id` (The beneficiary id (`ben_…`).)
+
+**Request fields** (`UpdateBeneficiary`):
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `nickname` | string or null | **yes** | Your own label for this recipient; null or an empty string clears it. max length 60 |
+
+**Returns** (HTTP 200): [Beneficiary](#beneficiary) — The updated beneficiary.
+
+**Example**
+
+```ts
+const result = await pletopay.beneficiaries.update(id, {
+    "nickname": "Landlord"
+  });
+```
+
+### `pletopay.beneficiaries.delete(id, options?)`
+
+`DELETE /api/v1/beneficiaries/{id}` · operation `deleteBeneficiary`
+
+Delete a saved beneficiary. Transfers already sent are not affected. A later successful transfer to the same account saves it again.
+
+**Path arguments:** `id` (The beneficiary id (`ben_…`).)
+
+**Returns** (HTTP 200): [DeletedObject](#deletedobject) — Confirmation that the beneficiary was deleted.
+
+## Bulk transfers
+
+Pay many accounts at once: add the rows, have every account checked, review the totals, then send. The whole cost is held when you submit.
+
+### `pletopay.transferBatches.create(params, options?)`
+
+`POST /api/v1/transfer-batches` · operation `createTransferBatch` · **Idempotency-Key required** (pass `options.idempotencyKey`; generated when omitted)
+
+Start a bulk transfer: many payouts that are checked, reviewed and sent together. **`Idempotency-Key` is required.**
+
+A batch has no row limit. Send up to 1,000 rows here and add the rest with `POST /api/v1/transfer-batches/{id}/items`, then call `POST /api/v1/transfer-batches/{id}/validate`. Pass `validate: true` to validate straight away when all rows fit in this request. If any row is invalid (for example below the ₦100.00 minimum, or a duplicate `reference`), nothing is added and `400 batch_items_invalid` lists the rows in `error.details.errors`.
+
+Nothing is held or sent until you submit.
+
+**Request fields** (`CreateTransferBatch`):
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | no | max length 100 |
+| `reference` | string | no | Your reference for the batch (unique per mode). Generated when omitted. |
+| `items` | array of BatchItemDto | no | The first rows (at most 1,000 per request). Add more with POST /transfer-batches/{id}/items. |
+| `validate` | boolean | no | Start validating straight away (no more rows can be added). Default false. |
+| `source` | `manual` · `csv` | no | Dashboard only: how the rows were entered. Ignored for API keys. |
+| `metadata` | map of string to string | no |  |
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `items[].bank_code` | string | **yes** | Bank code from GET /api/v1/banks |
+| `items[].account_number` | string | **yes** | 10-digit NUBAN account number |
+| `items[].amount` | number | **yes** | Amount in kobo (at least ₦100). min 10000 |
+| `items[].narration` | string | no | Shown on the recipient's statement. Defaults to the batch name.. max length 50 |
+| `items[].reference` | string | no | Your reference for this row, used as the transfer reference (unique per mode). Defaults to `<batch reference>-<row number>`. |
+| `items[].metadata` | map of string to string | no |  |
+
+**Returns** (HTTP 201): [TransferBatch](#transferbatch) — The new bulk transfer, `draft` (or `validating`).
+
+**Example**
+
+```ts
+const result = await pletopay.transferBatches.create({
+    "name": "November payroll",
+    "reference": "PAYROLL-2026-11",
+    "items": [
+      {
+        "bank_code": "058",
+        "account_number": "0123456789",
+        "amount": 25000000,
+        "narration": "November salary"
+      },
+      {
+        "bank_code": "044",
+        "account_number": "9876543210",
+        "amount": 18000000,
+        "reference": "PAYROLL-2026-11-EMP-42"
+      }
+    ],
+    "validate": true
+  });
+```
+
+### `pletopay.transferBatches.list(params?, options?)`
+
+`GET /api/v1/transfer-batches` · operation `listTransferBatches`
+
+List bulk transfers. Filter by `status`.
+
+**Query parameters** (`params`):
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `limit` | number | no | Number of objects to return. min 1, max 100, default `10` |
+| `starting_after` | string | no | Cursor: return objects created before this object id (older) |
+| `ending_before` | string | no | Cursor: return objects created after this object id (newer) |
+| `created` | `{ gt?, gte?, lt?, lte? }` (ISO-8601 or Date) | no | Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z |
+| `status` | `draft` · `validating` · `ready` · `processing` · `completed` · `partially_completed` · `failed` · `cancelled` | no | Only objects with this status. |
+
+**Returns** (HTTP 200): [TransferBatch[]](#transferbatch) — A page of bulk transfers, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
+
+### `pletopay.transferBatches.retrieve(id, options?)`
+
+`GET /api/v1/transfer-batches/{id}` · operation `getTransferBatch`
+
+Retrieve a bulk transfer by id (`tb_…`). `counts` gives the number of rows in each status; poll it (or listen for `transfer_batch.completed`) to follow progress.
+
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).)
+
+**Returns** (HTTP 200): [TransferBatch](#transferbatch) — The bulk transfer.
+
+### `pletopay.transferBatches.listItems(id, params?, options?)`
+
+`GET /api/v1/transfer-batches/{id}/items` · operation `listTransferBatchItems`
+
+List a bulk transfer’s rows in upload order, up to 500 at a time (`starting_after` = the last row’s id). Filter by `status`: `validating`, `valid`, `invalid`, `removed`, `queued`, then for sent rows their transfer’s `processing`, `succeeded`, `failed` or `reversed`.
+
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).)
+
+**Query parameters** (`params`):
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `limit` | number | no | Number of rows to return. min 1, max 500, default `50` |
+| `starting_after` | string | no | Cursor: return rows after this row id (rows are in upload order) |
+| `status` | `validating` · `valid` · `invalid` · `removed` · `queued` · `processing` · `succeeded` · `failed` · `reversed` | no | Only objects with this status. |
+
+**Returns** (HTTP 200): [TransferBatchItem[]](#transferbatchitem) — A page of rows, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
+
+### `pletopay.transferBatches.addItems(id, params, options?)`
+
+`POST /api/v1/transfer-batches/{id}/items` · operation `addTransferBatchItems` · **Idempotency-Key required** (pass `options.idempotencyKey`; generated when omitted)
+
+Append up to 1,000 rows to a `draft` bulk transfer. **`Idempotency-Key` is required**, so a retried chunk is never added twice. All or nothing: if any row is invalid, none is added (`400 batch_items_invalid`).
+
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).)
+
+**Request fields** (`AddBatchItems`):
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `items` | array of BatchItemDto | **yes** | At most 1,000 rows per request |
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `items[].bank_code` | string | **yes** | Bank code from GET /api/v1/banks |
+| `items[].account_number` | string | **yes** | 10-digit NUBAN account number |
+| `items[].amount` | number | **yes** | Amount in kobo (at least ₦100). min 10000 |
+| `items[].narration` | string | no | Shown on the recipient's statement. Defaults to the batch name.. max length 50 |
+| `items[].reference` | string | no | Your reference for this row, used as the transfer reference (unique per mode). Defaults to `<batch reference>-<row number>`. |
+| `items[].metadata` | map of string to string | no |  |
+
+**Returns** (HTTP 201): [TransferBatch](#transferbatch) — The bulk transfer with its new totals.
+
+**Example**
+
+```ts
+const result = await pletopay.transferBatches.addItems(id, {
+    "items": [
+      {
+        "bank_code": "058",
+        "account_number": "0123456789",
+        "amount": 25000000,
+        "narration": "November salary"
+      }
+    ]
+  });
+```
+
+### `pletopay.transferBatches.updateItem(id, itemId, params, options?)`
+
+`PATCH /api/v1/transfer-batches/{id}/items/{itemId}` · operation `updateTransferBatchItem` · Idempotency-Key accepted (generated when omitted)
+
+Fix a row before you submit: the bank code, account number, amount, narration or reference. Changing the account (or editing an `invalid` row) checks it again, and the batch is `validating` until it is done.
+
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).), `itemId` (The row id (`tbi_…`).)
+
+**Request fields** (`UpdateBatchItem`):
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `bank_code` | string | no |  |
+| `account_number` | string | no |  |
+| `amount` | number | no | Amount in kobo (at least ₦100) |
+| `narration` | string | no | max length 50 |
+| `reference` | string | no |  |
+
+**Returns** (HTTP 200): [TransferBatchItem](#transferbatchitem) — The updated row.
+
+**Example**
+
+```ts
+const result = await pletopay.transferBatches.updateItem(id, itemId, {
+    "account_number": "0123456780"
+  });
+```
+
+### `pletopay.transferBatches.removeItem(id, itemId, options?)`
+
+`DELETE /api/v1/transfer-batches/{id}/items/{itemId}` · operation `removeTransferBatchItem`
+
+Remove a row before you submit. It is kept, as `removed`, and left out of the totals.
+
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).), `itemId` (The row id (`tbi_…`).)
+
+**Returns** (HTTP 200): [TransferBatch](#transferbatch) — The bulk transfer with its new totals.
+
+### `pletopay.transferBatches.validate(id, options?)`
+
+`POST /api/v1/transfer-batches/{id}/validate` · operation `validateTransferBatch` · Idempotency-Key accepted (generated when omitted)
+
+Close a `draft` to new rows and check every account (name enquiry). The batch is `validating`, then `ready`; each row is `valid` (with `account_name`) or `invalid` (with `error`). Rows checked per day are capped at twice your daily transfer count (`403 batch_validation_limit`). In live mode this needs an approved business verification.
+
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).)
+
+**Returns** (HTTP 200): [TransferBatch](#transferbatch) — The bulk transfer, `validating`.
+
+### `pletopay.transferBatches.submit(id, options?)`
+
+`POST /api/v1/transfer-batches/{id}/submit` · operation `submitTransferBatch` · **Idempotency-Key required** (pass `options.idempotencyKey`; generated when omitted)
+
+Send a `ready` bulk transfer. **`Idempotency-Key` is required.**
+
+All or nothing: the whole cost of the `valid` rows (amounts, transfer charges and stamp duty: `total_debit`) is held from your available balance at once, or nothing is held (`400 insufficient_funds`). The batch must also fit your risk limits as a whole (`403 risk_limit_exceeded`). `invalid` rows are skipped.
+
+The rows are then sent one by one, each as an ordinary transfer with its own `transfer.*` events and the batch’s id in `batch`. Just before each row is sent its account is checked again: if the name no longer matches the one you reviewed, that row is not sent (`account_name_changed`). When every transfer is final, anything left of the hold returns to your available balance and `transfer_batch.completed` is sent. A submitted batch can’t be cancelled.
+
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).)
+
+**Returns** (HTTP 200): [TransferBatch](#transferbatch) — The bulk transfer, `processing`.
+
+### `pletopay.transferBatches.cancel(id, options?)`
+
+`POST /api/v1/transfer-batches/{id}/cancel` · operation `cancelTransferBatch` · Idempotency-Key accepted (generated when omitted)
+
+Cancel a bulk transfer before you submit it. Nothing is held before submit, so nothing moves.
+
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).)
+
+**Returns** (HTTP 200): [TransferBatch](#transferbatch) — The bulk transfer, `cancelled`.
+
 ## Refunds
 
 Return money for a payment by bank transfer, fully or partially.
@@ -1004,7 +1318,7 @@ The payment becomes `partially_refunded` or `refunded` only once the refund has 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `payment` | string | **yes** | The original payment (pay_…) |
-| `amount` | number | no | Amount in kobo; defaults to the full refundable amount (partial refunds allowed) |
+| `amount` | number | no | Amount in kobo (at least ₦100); defaults to the full refundable amount (partial refunds allowed). min 10000 |
 | `reason` | string | **yes** |  |
 | `reference` | string | no | Your unique refund reference |
 | `destination` | unknown | no | Where to send the money. Defaults to the original sender when their full account details are known. |
@@ -1329,7 +1643,7 @@ Every ledger journal that moved your balances, with its signed effect per balanc
 | `starting_after` | string | no | Cursor: return objects created before this object id (older) |
 | `ending_before` | string | no | Cursor: return objects created after this object id (newer) |
 | `created` | `{ gt?, gte?, lt?, lte? }` (ISO-8601 or Date) | no | Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z |
-| `type` | `payment_receipt` · `unmatched_receipt` · `unapplied_receipt` · `unapplied_application` · `suspense_assignment` · `funds_release` · `sweep` · `transfer_reserve` · `transfer_complete` · `transfer_release` · `external_debit` · `adjustment` · `reversal` · `settlement_reserve` · `settlement_complete` · `settlement_release` · `split_allocation` | no | Only objects of this type. |
+| `type` | `payment_receipt` · `unmatched_receipt` · `unapplied_receipt` · `unapplied_application` · `suspense_assignment` · `funds_release` · `sweep` · `transfer_reserve` · `transfer_complete` · `transfer_release` · `external_debit` · `adjustment` · `reversal` · `settlement_reserve` · `settlement_complete` · `settlement_release` · `split_allocation` · `transfer_charge` · `transfer_charge_release` · `stamp_duty_charge` · `stamp_duty_release` · `settlement_charge` · `settlement_charge_release` · `settlement_stamp_duty` · `settlement_stamp_duty_release` · `balance_funding` | no | Only objects of this type. |
 | `source` | `payment` · `transfer` · `account_transaction` · `adjustment` | no | What caused the movement |
 
 **Returns** (HTTP 200): [LedgerTransaction[]](#ledgertransaction) — A page of ledger transactions, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
@@ -1489,7 +1803,7 @@ Register a publicly reachable endpoint to receive events (https is required for 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `url` | string | **yes** |  |
-| `enabled_events` | array of `*` · `payment.created` · `payment.pending` · `payment.succeeded` · `payment.failed` · `payment.expired` · `payment.under_review` · `payment.reversed` · `payment.partially_refunded` · `payment.refunded` · `virtual_account.created` · `virtual_account.updated` · `virtual_account.closed` · `transfer.created` · `transfer.processing` · `transfer.succeeded` · `transfer.failed` · `transfer.reversed` · `settlement.created` · `settlement.completed` · `settlement.failed` · `refund.created` · `refund.succeeded` · `refund.failed` · `checkout.session.completed` · `checkout.session.expired` · `invoice.created` · `invoice.finalized` · `invoice.paid` · `invoice.voided` · `invoice.marked_uncollectible` · `subscription.created` · `subscription.updated` · `subscription.past_due` · `subscription.canceled` · `report.ready` · `report.failed` · `risk.event_flagged` · `webhook.test` | **yes** |  |
+| `enabled_events` | array of `*` · `payment.created` · `payment.pending` · `payment.succeeded` · `payment.failed` · `payment.expired` · `payment.under_review` · `payment.reversed` · `payment.partially_refunded` · `payment.refunded` · `virtual_account.created` · `virtual_account.updated` · `virtual_account.closed` · `transfer.created` · `transfer.processing` · `transfer.succeeded` · `transfer.failed` · `transfer.reversed` · `transfer_batch.processing` · `transfer_batch.completed` · `settlement.created` · `settlement.completed` · `settlement.failed` · `balance.funded` · `refund.created` · `refund.succeeded` · `refund.failed` · `checkout.session.completed` · `checkout.session.expired` · `invoice.created` · `invoice.finalized` · `invoice.paid` · `invoice.voided` · `invoice.marked_uncollectible` · `subscription.created` · `subscription.updated` · `subscription.past_due` · `subscription.canceled` · `report.ready` · `report.failed` · `risk.event_flagged` · `webhook.test` | **yes** |  |
 | `description` | string | no |  |
 
 **Returns** (HTTP 201): [WebhookEndpoint](#webhookendpoint) — The new endpoint, including its `secret`.
@@ -1549,7 +1863,7 @@ Change an endpoint’s URL, events or description, or disable and re-enable it. 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `url` | string | no |  |
-| `enabled_events` | array of `*` · `payment.created` · `payment.pending` · `payment.succeeded` · `payment.failed` · `payment.expired` · `payment.under_review` · `payment.reversed` · `payment.partially_refunded` · `payment.refunded` · `virtual_account.created` · `virtual_account.updated` · `virtual_account.closed` · `transfer.created` · `transfer.processing` · `transfer.succeeded` · `transfer.failed` · `transfer.reversed` · `settlement.created` · `settlement.completed` · `settlement.failed` · `refund.created` · `refund.succeeded` · `refund.failed` · `checkout.session.completed` · `checkout.session.expired` · `invoice.created` · `invoice.finalized` · `invoice.paid` · `invoice.voided` · `invoice.marked_uncollectible` · `subscription.created` · `subscription.updated` · `subscription.past_due` · `subscription.canceled` · `report.ready` · `report.failed` · `risk.event_flagged` · `webhook.test` | no |  |
+| `enabled_events` | array of `*` · `payment.created` · `payment.pending` · `payment.succeeded` · `payment.failed` · `payment.expired` · `payment.under_review` · `payment.reversed` · `payment.partially_refunded` · `payment.refunded` · `virtual_account.created` · `virtual_account.updated` · `virtual_account.closed` · `transfer.created` · `transfer.processing` · `transfer.succeeded` · `transfer.failed` · `transfer.reversed` · `transfer_batch.processing` · `transfer_batch.completed` · `settlement.created` · `settlement.completed` · `settlement.failed` · `balance.funded` · `refund.created` · `refund.succeeded` · `refund.failed` · `checkout.session.completed` · `checkout.session.expired` · `invoice.created` · `invoice.finalized` · `invoice.paid` · `invoice.voided` · `invoice.marked_uncollectible` · `subscription.created` · `subscription.updated` · `subscription.past_due` · `subscription.canceled` · `report.ready` · `report.failed` · `risk.event_flagged` · `webhook.test` | no |  |
 | `description` | string | no |  |
 | `status` | `enabled` · `disabled` | no |  |
 
@@ -1630,7 +1944,7 @@ List events, the same objects delivered to your webhooks. Filter by `type` or by
 | `starting_after` | string | no | Cursor: return objects created before this object id (older) |
 | `ending_before` | string | no | Cursor: return objects created after this object id (newer) |
 | `created` | `{ gt?, gte?, lt?, lte? }` (ISO-8601 or Date) | no | Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z |
-| `type` | `payment.created` · `payment.pending` · `payment.succeeded` · `payment.failed` · `payment.expired` · `payment.under_review` · `payment.reversed` · `payment.partially_refunded` · `payment.refunded` · `virtual_account.created` · `virtual_account.updated` · `virtual_account.closed` · `transfer.created` · `transfer.processing` · `transfer.succeeded` · `transfer.failed` · `transfer.reversed` · `settlement.created` · `settlement.completed` · `settlement.failed` · `refund.created` · `refund.succeeded` · `refund.failed` · `checkout.session.completed` · `checkout.session.expired` · `invoice.created` · `invoice.finalized` · `invoice.paid` · `invoice.voided` · `invoice.marked_uncollectible` · `subscription.created` · `subscription.updated` · `subscription.past_due` · `subscription.canceled` · `report.ready` · `report.failed` · `risk.event_flagged` · `webhook.test` | no | Only objects of this type. |
+| `type` | `payment.created` · `payment.pending` · `payment.succeeded` · `payment.failed` · `payment.expired` · `payment.under_review` · `payment.reversed` · `payment.partially_refunded` · `payment.refunded` · `virtual_account.created` · `virtual_account.updated` · `virtual_account.closed` · `transfer.created` · `transfer.processing` · `transfer.succeeded` · `transfer.failed` · `transfer.reversed` · `transfer_batch.processing` · `transfer_batch.completed` · `settlement.created` · `settlement.completed` · `settlement.failed` · `balance.funded` · `refund.created` · `refund.succeeded` · `refund.failed` · `checkout.session.completed` · `checkout.session.expired` · `invoice.created` · `invoice.finalized` · `invoice.paid` · `invoice.voided` · `invoice.marked_uncollectible` · `subscription.created` · `subscription.updated` · `subscription.past_due` · `subscription.canceled` · `report.ready` · `report.failed` · `risk.event_flagged` · `webhook.test` | no | Only objects of this type. |
 | `resource_id` | string | no | Only events about this object (e.g. pay_…) |
 
 **Returns** (HTTP 200): [Event[]](#event) — A page of events, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one.
@@ -1697,6 +2011,8 @@ The transfer then flows through the same pipeline as live money: the payment mov
 | --- | --- | --- | --- |
 | `account_number` | string | **yes** | Your virtual account number that should receive the transfer |
 | `amount` | number | **yes** | Amount in kobo |
+| `sender_name` | string | no | Name of the simulated sender |
+| `sender_account_number` | string | no | Account number of the simulated sender. Refunds go back to the sender, so a test value here (see the sandbox test values) lets you test refund outcomes. |
 
 **Returns** (HTTP 202): [SimulatedTransfer](#simulatedtransfer) — The simulation was accepted.
 
@@ -1708,6 +2024,16 @@ const result = await pletopay.sandbox.simulateTransfer({
     "amount": 5000000
   });
 ```
+
+### `pletopay.sandbox.testValues(options?)`
+
+`GET /api/v1/sandbox/test-values` · operation `listSandboxTestValues` · **test mode only**
+
+**Test mode only** (`403 test_mode_only` with a live key). Recipient account numbers that give a payout (or a refund) a fixed outcome in test mode, so you can test failures on purpose: declined, processing then succeeded, processing then failed, a timeout confirmed by a status check, and an account that is not found.
+
+Use them as the recipient of a payout, or as `sender_account_number` when you simulate a transfer, to test what happens to a refund. Any other number succeeds.
+
+**Returns** (HTTP 200): [SandboxTestValues](#sandboxtestvalues) — The test values.
 
 ## Object schemas
 
@@ -1772,7 +2098,7 @@ What to show your customer: the account to transfer to, at which bank, until whe
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `account_number` | string | **yes** | pattern `^[0-9]{10}$` |
-| `account_name` | string | **yes** | Account name; payers see it prefixed by the business short name (e.g. "IPC/Ada Stores Ltd") |
+| `account_name` | string | **yes** | Account name payers see when they look up the account |
 | `bank_name` | string | **yes** |  |
 | `bank_code` | string | **yes** |  |
 | `virtual_account` | string | **yes** | pattern `^va_[0-9A-HJKMNP-TV-Z]{26}$` |
@@ -1837,6 +2163,25 @@ A bank account number that routes transfers into your balance: `dedicated` (one 
 | `metadata` | map of string to string | **yes** |  |
 | `created_at` | string (date-time) | **yes** |  |
 
+### Beneficiary
+
+A saved transfer recipient. Pay it with `beneficiary_id` on Create a transfer.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | **yes** | pattern `^ben_[0-9A-HJKMNP-TV-Z]{26}$` |
+| `object` | `beneficiary` | **yes** |  |
+| `livemode` | boolean | **yes** |  |
+| `bank_code` | string | **yes** |  |
+| `bank_name` | string or null | **yes** | Bank name for display (null if the list of banks is unavailable) |
+| `account_number` | string | **yes** | pattern `^[0-9]{10}$` |
+| `account_name` | string | **yes** | The account name, as last resolved |
+| `nickname` | string or null | **yes** | max length 60 |
+| `source` | `manual` · `transfer` | **yes** | `transfer`: saved automatically by a successful transfer. `manual`: added by you. |
+| `last_paid_at` | string or null | **yes** | When the latest successful transfer to this account completed |
+| `created_at` | string (date-time) | **yes** |  |
+| `updated_at` | string (date-time) | **yes** |  |
+
 ### Transfer
 
 Money sent from your available balance to a bank account.
@@ -1848,12 +2193,15 @@ Money sent from your available balance to a bank account.
 | `livemode` | boolean | **yes** |  |
 | `reference` | string | **yes** |  |
 | `amount` | integer | **yes** | Minor units (kobo for NGN) |
-| `fee` | integer | **yes** | Fees charged to you for this transfer (transfer fee, stamp duty, platform fee) |
+| `fee` | integer | **yes** | Everything charged to you for this transfer: transfer_charge + stamp_duty |
+| `transfer_charge` | integer | **yes** | The transfer charge (a separate line in your balance history) |
+| `stamp_duty` | integer | **yes** | Stamp duty on transfers of ₦10,000 or more (a separate line in your balance history) |
 | `total_debit` | integer | **yes** | amount + fee, debited from your available balance |
 | `currency` | `NGN` | **yes** |  |
 | `status` | `pending` · `processing` · `succeeded` · `failed` · `reversed` | **yes** | A transfer whose outcome is unknown stays processing until confirmed — never failed. |
 | `beneficiary` | object | **yes** |  |
 | `narration` | string | **yes** |  |
+| `batch` | null or string | no |  |
 | `session_id` | string or null | **yes** |  |
 | `failure_reason` | string or null | **yes** |  |
 | `metadata` | map of string to string | **yes** |  |
@@ -1866,6 +2214,70 @@ Money sent from your available balance to a bank account.
 | `beneficiary.bank_name` | string or null | **yes** | Bank name for display (null if the list of banks is unavailable) |
 | `beneficiary.account_number` | string | **yes** | pattern `^[0-9]{10}$` |
 | `beneficiary.account_name` | string or null | **yes** |  |
+
+### TransferBatch
+
+A bulk transfer: many payouts checked, reviewed and sent together. Sent with `transfer_batch.processing` and `transfer_batch.completed`.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | **yes** | pattern `^tb_[0-9A-HJKMNP-TV-Z]{26}$` |
+| `object` | `transfer_batch` | **yes** |  |
+| `livemode` | boolean | **yes** |  |
+| `reference` | string | **yes** |  |
+| `name` | string or null | **yes** |  |
+| `status` | `draft` · `validating` · `ready` · `processing` · `completed` · `partially_completed` · `failed` · `cancelled` | **yes** | draft: rows can be added. validating: accounts are being checked. ready: can be submitted. processing: held and being sent. completed / partially_completed / failed: every transfer is final. |
+| `source` | `api` · `dashboard` | **yes** |  |
+| `currency` | `NGN` | **yes** |  |
+| `item_count` | integer | **yes** | Rows, not counting removed ones |
+| `counts` | object | **yes** | Rows in each status |
+| `total_amount` | integer | **yes** | Sum of the rows to send (not invalid or removed) |
+| `total_fees` | integer | **yes** | Their transfer charges and stamp duty |
+| `total_debit` | integer | **yes** | total_amount + total_fees: what submit holds |
+| `reserved_amount` | integer | **yes** | What was held at submit (0 before) |
+| `failure_reason` | string or null | **yes** |  |
+| `metadata` | map of string to string | **yes** |  |
+| `created_at` | string (date-time) | **yes** |  |
+| `submitted_at` | string or null | **yes** |  |
+| `completed_at` | string or null | **yes** |  |
+| `cancelled_at` | string or null | **yes** |  |
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `counts.validating` | integer | **yes** |  |
+| `counts.valid` | integer | **yes** |  |
+| `counts.invalid` | integer | **yes** |  |
+| `counts.removed` | integer | **yes** |  |
+| `counts.queued` | integer | **yes** |  |
+| `counts.processing` | integer | **yes** |  |
+| `counts.succeeded` | integer | **yes** |  |
+| `counts.failed` | integer | **yes** |  |
+| `counts.reversed` | integer | **yes** |  |
+
+### TransferBatchItem
+
+One row of a bulk transfer. Once sent, it takes its transfer’s status.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | **yes** | pattern `^tbi_[0-9A-HJKMNP-TV-Z]{26}$` |
+| `object` | `transfer_batch_item` | **yes** |  |
+| `batch` | string | **yes** | pattern `^tb_[0-9A-HJKMNP-TV-Z]{26}$` |
+| `index` | integer | **yes** | Row number, in upload order (from 1) |
+| `status` | `validating` · `valid` · `invalid` · `removed` · `queued` · `processing` · `succeeded` · `failed` · `reversed` | **yes** | Once sent, the row takes its transfer’s status. |
+| `bank_code` | string | **yes** |  |
+| `bank_name` | string or null | **yes** | Bank name for display (null if the list of banks is unavailable) |
+| `account_number` | string | **yes** | pattern `^[0-9]{10}$` |
+| `account_name` | string or null | **yes** | The account holder’s name (name enquiry) |
+| `amount` | integer | **yes** | Minor units (kobo for NGN) |
+| `fee` | integer | **yes** | Transfer charge + stamp duty for this row |
+| `total_debit` | integer | **yes** | Minor units (kobo for NGN) |
+| `narration` | string | **yes** |  |
+| `reference` | string | **yes** | Becomes the transfer’s reference |
+| `metadata` | map of string to string | **yes** |  |
+| `error` | null or object | **yes** | Why the row is invalid or was not sent |
+| `transfer` | null or string | **yes** | The transfer, once the row is sent |
+| `created_at` | string (date-time) | **yes** |  |
 
 ### Refund
 
@@ -2198,7 +2610,7 @@ Opening, credits, debits and closing per balance over a period.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `balances[].balance` | `available` · `pending` · `held` · `unapplied` · `settling` | **yes** |  |
+| `balances[].balance` | `available` · `pending` · `held` · `unapplied` · `settling` · `reserved` | **yes** |  |
 | `balances[].opening` | integer | **yes** |  |
 | `balances[].credits` | integer | **yes** |  |
 | `balances[].debits` | integer | **yes** |  |
@@ -2239,6 +2651,7 @@ Your balances in kobo, computed from the ledger.
 | `held` | integer | **yes** | Minor units (kobo for NGN) |
 | `unapplied` | integer | **yes** | Minor units (kobo for NGN) |
 | `settling` | integer | **yes** | Minor units (kobo for NGN) |
+| `reserved` | integer | **yes** | Held for bulk transfers that are being sent |
 | `total` | integer | **yes** | Minor units (kobo for NGN) |
 | `settled_total` | integer | **yes** | Lifetime amount paid out by completed settlements |
 
@@ -2255,8 +2668,27 @@ A ledger journal and its signed effect on your balances.
 | `description` | string | **yes** |  |
 | `currency` | `NGN` | **yes** |  |
 | `net_amount` | integer | **yes** | Signed net effect on your balances (minor units) |
-| `balance_changes` | map of string to integer | **yes** | Signed change per balance: available, pending, held, unapplied, settling |
+| `balance_changes` | map of string to integer | **yes** | Signed change per balance: available, pending, held, unapplied, settling, reserved |
 | `source` | null or object | **yes** |  |
+| `created_at` | string (date-time) | **yes** |  |
+
+### BalanceFunding
+
+Money you sent to your own funding account to top up your balance. Sent with the `balance.funded` event once it is available.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | **yes** | pattern `^fnd_[0-9A-HJKMNP-TV-Z]{26}$` |
+| `object` | `balance_funding` | **yes** |  |
+| `livemode` | boolean | **yes** |  |
+| `status` | `pending` · `available` | **yes** | pending: received, not yet in your available balance. available: added to it. |
+| `currency` | `NGN` | **yes** |  |
+| `amount` | integer | **yes** | What you sent (minor units) |
+| `fee` | integer | **yes** | Transfer charge on the top-up |
+| `stamp_duty` | integer | **yes** | Stamp duty (₦10,000 and above) |
+| `net_amount` | integer | **yes** | Added to your balance: amount − fee − stamp_duty |
+| `sender` | null or object | **yes** |  |
+| `available_at` | string (date-time) | **yes** |  |
 | `created_at` | string (date-time) | **yes** |  |
 
 ### WebhookEndpoint
@@ -2354,6 +2786,19 @@ Acknowledgement that a simulated transfer was accepted.
 | `account_number` | string | **yes** |  |
 | `amount` | integer | **yes** | Minor units (kobo for NGN) |
 
+### SandboxTestValues
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `object` | `sandbox_test_values` | **yes** |  |
+| `not_found_prefix` | string | **yes** | Recipient account numbers starting with this are never found |
+| `recipient_accounts` | array of object | **yes** | Payout and refund recipient account numbers with a fixed outcome in test mode |
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `recipient_accounts[].account_number` | string | **yes** |  |
+| `recipient_accounts[].outcome` | string | **yes** |  |
+
 ### Settlement
 
 A payout of available balance to a settlement account.
@@ -2368,8 +2813,8 @@ A payout of available balance to a settlement account.
 | `trigger` | `scheduled` · `manual` | **yes** |  |
 | `amount` | integer | **yes** | Sent to your settlement account |
 | `fee` | integer | **yes** | Platform settlement fee |
-| `transfer_fee` | integer | **yes** | Transfer fee (when passed through) |
-| `transfer_fee_vat` | integer | **yes** | 7.5% VAT on the transfer fee (when passed through) |
+| `transfer_fee` | integer | **yes** | The settlement transfer charge |
+| `transfer_fee_vat` | integer | **yes** | Deprecated: always 0. Use transfer_fee. |
 | `stamp_duty` | integer | **yes** | Minor units (kobo for NGN) |
 | `total_deducted` | integer | **yes** | Taken from your available balance: amount + fees |
 | `reserve_retained` | integer | **yes** | Kept available by your reserve setting |
@@ -2433,9 +2878,12 @@ Each event is `{ id, object: "event", type, api_version, livemode, created_at, d
 | `transfer.succeeded` | [Transfer](#transfer) | The transfer was confirmed as received by the beneficiary. |
 | `transfer.failed` | [Transfer](#transfer) | The transfer was confirmed as failed. The reserved funds were released. |
 | `transfer.reversed` | [Transfer](#transfer) | A succeeded transfer was reversed. |
+| `transfer_batch.processing` | [TransferBatch](#transferbatch) | A bulk transfer was submitted: its whole cost is held and its rows are being sent. |
+| `transfer_batch.completed` | [TransferBatch](#transferbatch) | Every transfer in a bulk transfer is final. Anything left of the hold was returned to your available balance. |
 | `settlement.created` | [Settlement](#settlement) | A settlement of your available balance was opened. |
 | `settlement.completed` | [Settlement](#settlement) | A settlement was paid into your settlement account. |
 | `settlement.failed` | [Settlement](#settlement) | A settlement payout failed. The funds were returned to your available balance. |
+| `balance.funded` | [BalanceFunding](#balancefunding) | Money you sent to your balance funding account is now in your available balance, less the transfer charges. |
 | `refund.created` | [Refund](#refund) | A refund was created and its funds reserved. |
 | `refund.succeeded` | [Refund](#refund) | A refund was paid out to the customer. |
 | `refund.failed` | [Refund](#refund) | A refund payout failed. The funds were released. |

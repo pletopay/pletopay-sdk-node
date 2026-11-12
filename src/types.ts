@@ -40,6 +40,10 @@ export type Subaccount = Schemas['Subaccount'];
 export type SubaccountBalance = Schemas['SubaccountBalance'];
 export type SplitRule = Schemas['SplitRule'];
 export type Transfer = Schemas['Transfer'];
+export type TransferBatch = Schemas['TransferBatch'];
+export type TransferBatchItem = Schemas['TransferBatchItem'];
+/** A saved transfer recipient (`ben_…`). `Beneficiary` is the account given inline on a transfer. */
+export type SavedBeneficiary = Schemas['Beneficiary'];
 export type AccountResolution = Schemas['AccountResolution'];
 export type Bank = Schemas['Bank'];
 export type Settlement = Schemas['Settlement'];
@@ -63,12 +67,15 @@ export type WebhookDelivery = Schemas['WebhookDelivery'];
 export type WebhookTest = Schemas['WebhookTest'];
 export type DeletedObject = Schemas['DeletedObject'];
 export type SimulatedTransfer = Schemas['SimulatedTransfer'];
+export type SandboxTestValues = Schemas['SandboxTestValues'];
 export type ListMeta = Schemas['ListMeta'];
 export type ApiErrorBody = Schemas['Error'];
 export type ApiErrorType = ApiErrorBody['error']['type'];
 
 export type PaymentStatus = Payment['status'];
 export type TransferStatus = Transfer['status'];
+export type TransferBatchStatus = TransferBatch['status'];
+export type TransferBatchItemStatus = TransferBatchItem['status'];
 export type RefundStatus = Refund['status'];
 export type VirtualAccountStatus = VirtualAccount['status'];
 export type CheckoutSessionStatus = CheckoutSession['status'];
@@ -97,8 +104,14 @@ export type SplitRuleCreateParams = Schemas['CreateSplitRuleDto'];
 export type SplitRuleUpdateParams = Schemas['UpdateSplitRuleDto'];
 export type SplitAllocation = Schemas['SplitAllocationDto'];
 export type TransferCreateParams = Schemas['CreateTransferDto'];
+/** The recipient account given inline on `transfers.create` (see `SavedBeneficiary` for saved ones). */
 export type Beneficiary = Schemas['BeneficiaryDto'];
+export type BeneficiaryCreateParams = Schemas['CreateBeneficiaryDto'];
+export type BeneficiaryUpdateParams = Schemas['UpdateBeneficiaryDto'];
 export type NameEnquiryParams = Schemas['NameEnquiryDto'];
+export type TransferBatchCreateParams = Schemas['CreateTransferBatchDto'];
+export type TransferBatchItemParams = Schemas['BatchItemDto'];
+export type TransferBatchItemUpdateParams = Schemas['UpdateBatchItemDto'];
 export type RefundCreateParams = Schemas['CreateRefundDto'];
 export type RefundDestination = Schemas['RefundDestinationDto'];
 export type CheckoutSessionCreateParams = Schemas['CreateCheckoutSessionDto'];
@@ -183,6 +196,26 @@ export interface VirtualAccountListParams extends ListParams {
 
 export interface TransferListParams extends ListParams {
   status?: TransferStatus;
+  /** A transfer id (exact), your reference or the account number (starts with), or the session id (exact). */
+  q?: string;
+}
+
+export interface TransferBatchListParams extends ListParams {
+  status?: TransferBatchStatus;
+}
+
+/** Rows page forwards only, in upload order. */
+export interface TransferBatchItemListParams {
+  /** 1–500, default 50. */
+  limit?: number;
+  /** Return rows after this row id (`tbi_…`). */
+  starting_after?: string;
+  status?: TransferBatchItemStatus;
+}
+
+export interface BeneficiaryListParams extends ListParams {
+  /** An id, the start of an account number, or part of the account name or nickname. */
+  q?: string;
 }
 
 export interface SettlementListParams extends ListParams {

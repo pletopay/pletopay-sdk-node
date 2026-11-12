@@ -4,6 +4,7 @@
 
 /** Every webhook event type the API can send. New types may be added at any time; ignore ones you do not handle. */
 export const EVENT_TYPES = [
+  'balance.funded',
   'checkout.session.completed',
   'checkout.session.expired',
   'invoice.created',
@@ -38,6 +39,8 @@ export const EVENT_TYPES = [
   'transfer.processing',
   'transfer.reversed',
   'transfer.succeeded',
+  'transfer_batch.completed',
+  'transfer_batch.processing',
   'virtual_account.closed',
   'virtual_account.created',
   'virtual_account.updated',

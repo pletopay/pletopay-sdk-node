@@ -346,7 +346,9 @@ export interface paths {
          * Send money from your available balance
          * @description Send money from your available balance to any Nigerian bank account. **`Idempotency-Key` is required**: if the request times out, retry with the same key and you will get the original transfer, never a second one.
          *
-         *     Resolve the account first with `POST /api/v1/transfers/name-enquiry`. The amount plus fees (`total_debit`) is reserved from your available balance immediately (`400 insufficient_funds` otherwise). The minimum transfer is ₦10.00 (`400 amount_below_minimum`) and `narration` is limited to 50 characters.
+         *     Give the recipient as `beneficiary` (bank code and account number), or pay a saved beneficiary with `beneficiary_id` (`ben_…`); not both. Resolve a new account first with `POST /api/v1/transfers/name-enquiry`. The account name is checked on every transfer; for a saved beneficiary whose account no longer carries the saved name, nothing is sent (`409 beneficiary_name_changed`). The recipient of every successful transfer is saved as a beneficiary.
+         *
+         *     The amount plus fees (`total_debit`) is reserved from your available balance immediately (`400 insufficient_funds` otherwise). The minimum transfer is ₦100.00 (`400 amount_below_minimum`) and `narration` is limited to 50 characters.
          *
          *     A transfer whose outcome isn’t known yet stays `processing`; it is never reported `failed` until it is confirmed. Listen for `transfer.succeeded` / `transfer.failed`. A failed transfer releases the reserved funds.
          *
@@ -437,6 +439,218 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transfer-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List bulk transfers
+         * @description List bulk transfers. Filter by `status`.
+         */
+        get: operations["listTransferBatches"];
+        put?: never;
+        /**
+         * Create a bulk transfer
+         * @description Start a bulk transfer: many payouts that are checked, reviewed and sent together. **`Idempotency-Key` is required.**
+         *
+         *     A batch has no row limit. Send up to 1,000 rows here and add the rest with `POST /api/v1/transfer-batches/{id}/items`, then call `POST /api/v1/transfer-batches/{id}/validate`. Pass `validate: true` to validate straight away when all rows fit in this request. If any row is invalid (for example below the ₦100.00 minimum, or a duplicate `reference`), nothing is added and `400 batch_items_invalid` lists the rows in `error.details.errors`.
+         *
+         *     Nothing is held or sent until you submit.
+         */
+        post: operations["createTransferBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transfer-batches/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve a bulk transfer
+         * @description Retrieve a bulk transfer by id (`tb_…`). `counts` gives the number of rows in each status; poll it (or listen for `transfer_batch.completed`) to follow progress.
+         */
+        get: operations["getTransferBatch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transfer-batches/{id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a bulk transfer's rows
+         * @description List a bulk transfer’s rows in upload order, up to 500 at a time (`starting_after` = the last row’s id). Filter by `status`: `validating`, `valid`, `invalid`, `removed`, `queued`, then for sent rows their transfer’s `processing`, `succeeded`, `failed` or `reversed`.
+         */
+        get: operations["listTransferBatchItems"];
+        put?: never;
+        /**
+         * Add rows to a bulk transfer
+         * @description Append up to 1,000 rows to a `draft` bulk transfer. **`Idempotency-Key` is required**, so a retried chunk is never added twice. All or nothing: if any row is invalid, none is added (`400 batch_items_invalid`).
+         */
+        post: operations["addTransferBatchItems"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transfer-batches/{id}/items/{itemId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a row
+         * @description Remove a row before you submit. It is kept, as `removed`, and left out of the totals.
+         */
+        delete: operations["removeTransferBatchItem"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit a row
+         * @description Fix a row before you submit: the bank code, account number, amount, narration or reference. Changing the account (or editing an `invalid` row) checks it again, and the batch is `validating` until it is done.
+         */
+        patch: operations["updateTransferBatchItem"];
+        trace?: never;
+    };
+    "/api/v1/transfer-batches/{id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate a bulk transfer
+         * @description Close a `draft` to new rows and check every account (name enquiry). The batch is `validating`, then `ready`; each row is `valid` (with `account_name`) or `invalid` (with `error`). Rows checked per day are capped at twice your daily transfer count (`403 batch_validation_limit`). In live mode this needs an approved business verification.
+         */
+        post: operations["validateTransferBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transfer-batches/{id}/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit a bulk transfer
+         * @description Send a `ready` bulk transfer. **`Idempotency-Key` is required.**
+         *
+         *     All or nothing: the whole cost of the `valid` rows (amounts, transfer charges and stamp duty: `total_debit`) is held from your available balance at once, or nothing is held (`400 insufficient_funds`). The batch must also fit your risk limits as a whole (`403 risk_limit_exceeded`). `invalid` rows are skipped.
+         *
+         *     The rows are then sent one by one, each as an ordinary transfer with its own `transfer.*` events and the batch’s id in `batch`. Just before each row is sent its account is checked again: if the name no longer matches the one you reviewed, that row is not sent (`account_name_changed`). When every transfer is final, anything left of the hold returns to your available balance and `transfer_batch.completed` is sent. A submitted batch can’t be cancelled.
+         */
+        post: operations["submitTransferBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transfer-batches/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a bulk transfer
+         * @description Cancel a bulk transfer before you submit it. Nothing is held before submit, so nothing moves.
+         */
+        post: operations["cancelTransferBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/beneficiaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List saved beneficiaries
+         * @description List saved beneficiaries. The recipient of every successful transfer is saved automatically (`source: transfer`), and you can save accounts yourself (`source: manual`). Search with `q`: an id, the start of an account number, or part of the account name or nickname.
+         */
+        get: operations["listBeneficiaries"];
+        put?: never;
+        /**
+         * Save a beneficiary
+         * @description Save a bank account so you can pay it with `beneficiary_id` instead of sending account details each time. The account name is resolved first (`400 account_not_resolved` if it can’t be). An account already saved in this mode returns `409 beneficiary_exists`. Up to 5,000 beneficiaries per mode.
+         */
+        post: operations["createBeneficiary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/beneficiaries/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve a beneficiary
+         * @description Retrieve a beneficiary by id (`ben_…`).
+         */
+        get: operations["getBeneficiary"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a beneficiary
+         * @description Delete a saved beneficiary. Transfers already sent are not affected. A later successful transfer to the same account saves it again.
+         */
+        delete: operations["deleteBeneficiary"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a beneficiary's nickname
+         * @description Set or clear a beneficiary’s nickname. Account details can’t be changed: delete the beneficiary and save the new account.
+         */
+        patch: operations["updateBeneficiary"];
         trace?: never;
     };
     "/api/v1/settlements": {
@@ -1324,6 +1538,28 @@ export interface paths {
          *     The transfer then flows through the same pipeline as live money: the payment moves to `succeeded` and webhooks are sent. A wrong amount into an exact-amount account is refused (`400 simulation_rejected`), as a real transfer would be. An account that is not `active` (for example a one-time account that already received its payment) is refused before anything is sent (`409 virtual_account_not_active`). A `202` only means the simulation was accepted; watch the payment or its events for the outcome.
          */
         post: operations["simulateTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sandbox/test-values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the sandbox test values (test mode only)
+         * @description **Test mode only** (`403 test_mode_only` with a live key). Recipient account numbers that give a payout (or a refund) a fixed outcome in test mode, so you can test failures on purpose: declined, processing then succeeded, processing then failed, a timeout confirmed by a status check, and an account that is not found.
+         *
+         *     Use them as the recipient of a payout, or as `sender_account_number` when you simulate a transfer, to test what happens to a refund. Any other number succeeds.
+         */
+        get: operations["listSandboxTestValues"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2569,8 +2805,10 @@ export interface webhooks {
                      *           "livemode": false,
                      *           "reference": "PAYOUT-2026-0001",
                      *           "amount": 2500000,
-                     *           "fee": 1500,
-                     *           "total_debit": 2501500,
+                     *           "fee": 7000,
+                     *           "transfer_charge": 2000,
+                     *           "stamp_duty": 5000,
+                     *           "total_debit": 2507000,
                      *           "currency": "NGN",
                      *           "status": "pending",
                      *           "beneficiary": {
@@ -2660,8 +2898,10 @@ export interface webhooks {
                      *           "livemode": false,
                      *           "reference": "PAYOUT-2026-0001",
                      *           "amount": 2500000,
-                     *           "fee": 1500,
-                     *           "total_debit": 2501500,
+                     *           "fee": 7000,
+                     *           "transfer_charge": 2000,
+                     *           "stamp_duty": 5000,
+                     *           "total_debit": 2507000,
                      *           "currency": "NGN",
                      *           "status": "processing",
                      *           "beneficiary": {
@@ -2751,8 +2991,10 @@ export interface webhooks {
                      *           "livemode": false,
                      *           "reference": "PAYOUT-2026-0001",
                      *           "amount": 2500000,
-                     *           "fee": 1500,
-                     *           "total_debit": 2501500,
+                     *           "fee": 7000,
+                     *           "transfer_charge": 2000,
+                     *           "stamp_duty": 5000,
+                     *           "total_debit": 2507000,
                      *           "currency": "NGN",
                      *           "status": "processing",
                      *           "beneficiary": {
@@ -2842,8 +3084,10 @@ export interface webhooks {
                      *           "livemode": false,
                      *           "reference": "PAYOUT-2026-0001",
                      *           "amount": 2500000,
-                     *           "fee": 1500,
-                     *           "total_debit": 2501500,
+                     *           "fee": 7000,
+                     *           "transfer_charge": 2000,
+                     *           "stamp_duty": 5000,
+                     *           "total_debit": 2507000,
                      *           "currency": "NGN",
                      *           "status": "processing",
                      *           "beneficiary": {
@@ -2933,8 +3177,10 @@ export interface webhooks {
                      *           "livemode": false,
                      *           "reference": "PAYOUT-2026-0001",
                      *           "amount": 2500000,
-                     *           "fee": 1500,
-                     *           "total_debit": 2501500,
+                     *           "fee": 7000,
+                     *           "transfer_charge": 2000,
+                     *           "stamp_duty": 5000,
+                     *           "total_debit": 2507000,
                      *           "currency": "NGN",
                      *           "status": "processing",
                      *           "beneficiary": {
@@ -2956,6 +3202,202 @@ export interface webhooks {
                      *     }
                      */
                     "application/json": components["schemas"]["Event_transfer_reversed"];
+                };
+            };
+            responses: {
+                /** @description Acknowledged. Any 2xx stops retries; anything else is retried. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "transfer_batch.processing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * transfer_batch.processing
+         * @description A bulk transfer was submitted: its whole cost is held and its rows are being sent.
+         *
+         *     Verify `X-PletoPay-Signature` against the raw body, de-duplicate on `X-PletoPay-Event-ID`, and respond 2xx within 10 seconds.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description `t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`. Reject timestamps older than 5 minutes. */
+                    "X-PletoPay-Signature": string;
+                    /** @description The same `t` as in the signature (unix seconds). */
+                    "X-PletoPay-Timestamp": string;
+                    /** @description The event id (`evt_…`). De-duplicate on it: delivery is at least once. */
+                    "X-PletoPay-Event-ID": string;
+                    /** @description The event type, e.g. `payment.succeeded`. */
+                    "X-PletoPay-Event-Type": string;
+                    /** @description The delivery (`whd_…`); the same across retries of one delivery. */
+                    "X-PletoPay-Delivery-ID": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB",
+                     *       "object": "event",
+                     *       "type": "transfer_batch.processing",
+                     *       "api_version": "2026-09-24",
+                     *       "livemode": false,
+                     *       "created_at": "2026-09-24T18:04:12.000Z",
+                     *       "data": {
+                     *         "object": {
+                     *           "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *           "object": "transfer_batch",
+                     *           "livemode": false,
+                     *           "reference": "string",
+                     *           "name": "string",
+                     *           "status": "draft",
+                     *           "source": "api",
+                     *           "currency": "NGN",
+                     *           "item_count": 0,
+                     *           "counts": {
+                     *             "validating": 0,
+                     *             "valid": 0,
+                     *             "invalid": 0,
+                     *             "removed": 0,
+                     *             "queued": 0,
+                     *             "processing": 0,
+                     *             "succeeded": 0,
+                     *             "failed": 0,
+                     *             "reversed": 0
+                     *           },
+                     *           "total_amount": 0,
+                     *           "total_fees": 0,
+                     *           "total_debit": 0,
+                     *           "reserved_amount": 0,
+                     *           "failure_reason": "string",
+                     *           "metadata": {},
+                     *           "created_at": "2026-09-24T18:00:00.000Z",
+                     *           "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *           "completed_at": "2026-09-24T18:00:00.000Z",
+                     *           "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *         }
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Event_transfer_batch_processing"];
+                };
+            };
+            responses: {
+                /** @description Acknowledged. Any 2xx stops retries; anything else is retried. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "transfer_batch.completed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * transfer_batch.completed
+         * @description Every transfer in a bulk transfer is final. Anything left of the hold was returned to your available balance.
+         *
+         *     Verify `X-PletoPay-Signature` against the raw body, de-duplicate on `X-PletoPay-Event-ID`, and respond 2xx within 10 seconds.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description `t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`. Reject timestamps older than 5 minutes. */
+                    "X-PletoPay-Signature": string;
+                    /** @description The same `t` as in the signature (unix seconds). */
+                    "X-PletoPay-Timestamp": string;
+                    /** @description The event id (`evt_…`). De-duplicate on it: delivery is at least once. */
+                    "X-PletoPay-Event-ID": string;
+                    /** @description The event type, e.g. `payment.succeeded`. */
+                    "X-PletoPay-Event-Type": string;
+                    /** @description The delivery (`whd_…`); the same across retries of one delivery. */
+                    "X-PletoPay-Delivery-ID": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB",
+                     *       "object": "event",
+                     *       "type": "transfer_batch.completed",
+                     *       "api_version": "2026-09-24",
+                     *       "livemode": false,
+                     *       "created_at": "2026-09-24T18:04:12.000Z",
+                     *       "data": {
+                     *         "object": {
+                     *           "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *           "object": "transfer_batch",
+                     *           "livemode": false,
+                     *           "reference": "string",
+                     *           "name": "string",
+                     *           "status": "draft",
+                     *           "source": "api",
+                     *           "currency": "NGN",
+                     *           "item_count": 0,
+                     *           "counts": {
+                     *             "validating": 0,
+                     *             "valid": 0,
+                     *             "invalid": 0,
+                     *             "removed": 0,
+                     *             "queued": 0,
+                     *             "processing": 0,
+                     *             "succeeded": 0,
+                     *             "failed": 0,
+                     *             "reversed": 0
+                     *           },
+                     *           "total_amount": 0,
+                     *           "total_fees": 0,
+                     *           "total_debit": 0,
+                     *           "reserved_amount": 0,
+                     *           "failure_reason": "string",
+                     *           "metadata": {},
+                     *           "created_at": "2026-09-24T18:00:00.000Z",
+                     *           "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *           "completed_at": "2026-09-24T18:00:00.000Z",
+                     *           "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *         }
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Event_transfer_batch_completed"];
                 };
             };
             responses: {
@@ -3027,10 +3469,10 @@ export interface webhooks {
                      *           "trigger": "scheduled",
                      *           "amount": 31480000,
                      *           "fee": 0,
-                     *           "transfer_fee": 1500,
-                     *           "transfer_fee_vat": 113,
+                     *           "transfer_fee": 2500,
+                     *           "transfer_fee_vat": 0,
                      *           "stamp_duty": 5000,
-                     *           "total_deducted": 31486613,
+                     *           "total_deducted": 31487500,
                      *           "reserve_retained": 0,
                      *           "currency": "NGN",
                      *           "settlement_account": {
@@ -3124,10 +3566,10 @@ export interface webhooks {
                      *           "trigger": "scheduled",
                      *           "amount": 31480000,
                      *           "fee": 0,
-                     *           "transfer_fee": 1500,
-                     *           "transfer_fee_vat": 113,
+                     *           "transfer_fee": 2500,
+                     *           "transfer_fee_vat": 0,
                      *           "stamp_duty": 5000,
-                     *           "total_deducted": 31486613,
+                     *           "total_deducted": 31487500,
                      *           "reserve_retained": 0,
                      *           "currency": "NGN",
                      *           "settlement_account": {
@@ -3221,10 +3663,10 @@ export interface webhooks {
                      *           "trigger": "scheduled",
                      *           "amount": 31480000,
                      *           "fee": 0,
-                     *           "transfer_fee": 1500,
-                     *           "transfer_fee_vat": 113,
+                     *           "transfer_fee": 2500,
+                     *           "transfer_fee_vat": 0,
                      *           "stamp_duty": 5000,
-                     *           "total_deducted": 31486613,
+                     *           "total_deducted": 31487500,
                      *           "reserve_retained": 0,
                      *           "currency": "NGN",
                      *           "settlement_account": {
@@ -3247,6 +3689,90 @@ export interface webhooks {
                      *     }
                      */
                     "application/json": components["schemas"]["Event_settlement_failed"];
+                };
+            };
+            responses: {
+                /** @description Acknowledged. Any 2xx stops retries; anything else is retried. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "balance.funded": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * balance.funded
+         * @description Money you sent to your balance funding account is now in your available balance, less the transfer charges.
+         *
+         *     Verify `X-PletoPay-Signature` against the raw body, de-duplicate on `X-PletoPay-Event-ID`, and respond 2xx within 10 seconds.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description `t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`. Reject timestamps older than 5 minutes. */
+                    "X-PletoPay-Signature": string;
+                    /** @description The same `t` as in the signature (unix seconds). */
+                    "X-PletoPay-Timestamp": string;
+                    /** @description The event id (`evt_…`). De-duplicate on it: delivery is at least once. */
+                    "X-PletoPay-Event-ID": string;
+                    /** @description The event type, e.g. `payment.succeeded`. */
+                    "X-PletoPay-Event-Type": string;
+                    /** @description The delivery (`whd_…`); the same across retries of one delivery. */
+                    "X-PletoPay-Delivery-ID": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "evt_01J8Z5X7Q9K2M4N6P8R0S2T4WB",
+                     *       "object": "event",
+                     *       "type": "balance.funded",
+                     *       "api_version": "2026-09-24",
+                     *       "livemode": false,
+                     *       "created_at": "2026-09-24T18:04:12.000Z",
+                     *       "data": {
+                     *         "object": {
+                     *           "id": "fnd_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *           "object": "balance_funding",
+                     *           "livemode": false,
+                     *           "status": "pending",
+                     *           "currency": "NGN",
+                     *           "amount": 0,
+                     *           "fee": 0,
+                     *           "stamp_duty": 0,
+                     *           "net_amount": 0,
+                     *           "sender": {
+                     *             "name": "string",
+                     *             "account_number": "string",
+                     *             "bank_name": "string"
+                     *           },
+                     *           "available_at": "2026-09-24T18:00:00.000Z",
+                     *           "created_at": "2026-09-24T18:00:00.000Z"
+                     *         }
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Event_balance_funded"];
                 };
             };
             responses: {
@@ -3316,7 +3842,7 @@ export interface webhooks {
                      *           "payment": "pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
                      *           "reference": "RFND-12345",
                      *           "amount": 1000000,
-                     *           "fee": 1500,
+                     *           "fee": 6613,
                      *           "currency": "NGN",
                      *           "reason": "Customer returned the item",
                      *           "status": "pending",
@@ -3408,7 +3934,7 @@ export interface webhooks {
                      *           "payment": "pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
                      *           "reference": "RFND-12345",
                      *           "amount": 1000000,
-                     *           "fee": 1500,
+                     *           "fee": 6613,
                      *           "currency": "NGN",
                      *           "reason": "Customer returned the item",
                      *           "status": "processing",
@@ -3500,7 +4026,7 @@ export interface webhooks {
                      *           "payment": "pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
                      *           "reference": "RFND-12345",
                      *           "amount": 1000000,
-                     *           "fee": 1500,
+                     *           "fee": 6613,
                      *           "currency": "NGN",
                      *           "reason": "Customer returned the item",
                      *           "status": "processing",
@@ -5167,7 +5693,7 @@ export interface components {
         };
         CreateTransferDto: {
             /**
-             * @description Amount in kobo
+             * @description Amount in kobo (at least ₦100)
              * @example 2500000
              */
             amount: number;
@@ -5180,7 +5706,12 @@ export interface components {
              * @example Vendor payout September
              */
             narration: string;
-            beneficiary: components["schemas"]["BeneficiaryDto"];
+            beneficiary?: components["schemas"]["BeneficiaryDto"];
+            /**
+             * @description A saved beneficiary to pay instead of `beneficiary` (give one of the two, not both). The account name is checked again; if it no longer matches the saved name, nothing is sent (`beneficiary_name_changed`).
+             * @example ben_01JD3Q2Y4Z8X
+             */
+            beneficiary_id?: string;
             metadata?: {
                 [key: string]: string;
             };
@@ -5191,6 +5722,86 @@ export interface components {
             /** @example 0123456789 */
             account_number: string;
         };
+        BatchItemDto: {
+            /**
+             * @description Bank code from GET /api/v1/banks
+             * @example 058
+             */
+            bank_code: string;
+            /**
+             * @description 10-digit NUBAN account number
+             * @example 0123456789
+             */
+            account_number: string;
+            /**
+             * @description Amount in kobo (at least ₦100)
+             * @example 2500000
+             */
+            amount: number;
+            /** @description Shown on the recipient's statement. Defaults to the batch name. */
+            narration?: string;
+            /** @description Your reference for this row, used as the transfer reference (unique per mode). Defaults to `<batch reference>-<row number>`. */
+            reference?: string;
+            metadata?: {
+                [key: string]: string;
+            };
+        };
+        CreateTransferBatchDto: {
+            /** @example November payroll */
+            name?: string;
+            /** @description Your reference for the batch (unique per mode). Generated when omitted. */
+            reference?: string;
+            /** @description The first rows (at most 1,000 per request). Add more with POST /transfer-batches/{id}/items. */
+            items?: components["schemas"]["BatchItemDto"][];
+            /** @description Start validating straight away (no more rows can be added). Default false. */
+            validate?: boolean;
+            /**
+             * @description Dashboard only: how the rows were entered. Ignored for API keys.
+             * @enum {string}
+             */
+            source?: "manual" | "csv";
+            metadata?: {
+                [key: string]: string;
+            };
+        };
+        AddBatchItemsDto: {
+            /** @description At most 1,000 rows per request */
+            items: components["schemas"]["BatchItemDto"][];
+        };
+        UpdateBatchItemDto: {
+            /** @example 058 */
+            bank_code?: string;
+            /** @example 0123456789 */
+            account_number?: string;
+            /** @description Amount in kobo (at least ₦100) */
+            amount?: number;
+            narration?: string;
+            reference?: string;
+        };
+        CreateBeneficiaryDto: {
+            /**
+             * @description Bank code from GET /api/v1/banks
+             * @example 058
+             */
+            bank_code: string;
+            /**
+             * @description 10-digit NUBAN account number
+             * @example 0123456789
+             */
+            account_number: string;
+            /**
+             * @description Your own label for this recipient
+             * @example Office rent
+             */
+            nickname?: string;
+        };
+        UpdateBeneficiaryDto: {
+            /**
+             * @description Your own label for this recipient; null or an empty string clears it
+             * @example Office rent
+             */
+            nickname: string | null;
+        };
         RefundDestinationDto: {
             /** @example 058 */
             bank_code: string;
@@ -5200,7 +5811,7 @@ export interface components {
         CreateRefundDto: {
             /** @description The original payment (pay_…) */
             payment: string;
-            /** @description Amount in kobo; defaults to the full refundable amount (partial refunds allowed) */
+            /** @description Amount in kobo (at least ₦100); defaults to the full refundable amount (partial refunds allowed) */
             amount?: number;
             /** @example Customer returned the item */
             reason: string;
@@ -5214,7 +5825,7 @@ export interface components {
         };
         CreateCheckoutSessionDto: {
             /**
-             * @description Amount in kobo
+             * @description Amount in kobo (at least ₦100)
              * @example 5000000
              */
             amount: number;
@@ -5322,7 +5933,7 @@ export interface components {
             name: string;
             description?: string;
             /**
-             * @description Amount per period in kobo
+             * @description Amount per period in kobo (at least ₦100)
              * @example 500000
              */
             amount: number;
@@ -5394,12 +6005,12 @@ export interface components {
              *       "payment.failed"
              *     ]
              */
-            enabled_events: ("*" | "payment.created" | "payment.pending" | "payment.succeeded" | "payment.failed" | "payment.expired" | "payment.under_review" | "payment.reversed" | "payment.partially_refunded" | "payment.refunded" | "virtual_account.created" | "virtual_account.updated" | "virtual_account.closed" | "transfer.created" | "transfer.processing" | "transfer.succeeded" | "transfer.failed" | "transfer.reversed" | "settlement.created" | "settlement.completed" | "settlement.failed" | "refund.created" | "refund.succeeded" | "refund.failed" | "checkout.session.completed" | "checkout.session.expired" | "invoice.created" | "invoice.finalized" | "invoice.paid" | "invoice.voided" | "invoice.marked_uncollectible" | "subscription.created" | "subscription.updated" | "subscription.past_due" | "subscription.canceled" | "report.ready" | "report.failed" | "risk.event_flagged" | "webhook.test")[];
+            enabled_events: ("*" | "payment.created" | "payment.pending" | "payment.succeeded" | "payment.failed" | "payment.expired" | "payment.under_review" | "payment.reversed" | "payment.partially_refunded" | "payment.refunded" | "virtual_account.created" | "virtual_account.updated" | "virtual_account.closed" | "transfer.created" | "transfer.processing" | "transfer.succeeded" | "transfer.failed" | "transfer.reversed" | "transfer_batch.processing" | "transfer_batch.completed" | "settlement.created" | "settlement.completed" | "settlement.failed" | "balance.funded" | "refund.created" | "refund.succeeded" | "refund.failed" | "checkout.session.completed" | "checkout.session.expired" | "invoice.created" | "invoice.finalized" | "invoice.paid" | "invoice.voided" | "invoice.marked_uncollectible" | "subscription.created" | "subscription.updated" | "subscription.past_due" | "subscription.canceled" | "report.ready" | "report.failed" | "risk.event_flagged" | "webhook.test")[];
             description?: string;
         };
         UpdateWebhookEndpointDto: {
             url?: string;
-            enabled_events?: ("*" | "payment.created" | "payment.pending" | "payment.succeeded" | "payment.failed" | "payment.expired" | "payment.under_review" | "payment.reversed" | "payment.partially_refunded" | "payment.refunded" | "virtual_account.created" | "virtual_account.updated" | "virtual_account.closed" | "transfer.created" | "transfer.processing" | "transfer.succeeded" | "transfer.failed" | "transfer.reversed" | "settlement.created" | "settlement.completed" | "settlement.failed" | "refund.created" | "refund.succeeded" | "refund.failed" | "checkout.session.completed" | "checkout.session.expired" | "invoice.created" | "invoice.finalized" | "invoice.paid" | "invoice.voided" | "invoice.marked_uncollectible" | "subscription.created" | "subscription.updated" | "subscription.past_due" | "subscription.canceled" | "report.ready" | "report.failed" | "risk.event_flagged" | "webhook.test")[];
+            enabled_events?: ("*" | "payment.created" | "payment.pending" | "payment.succeeded" | "payment.failed" | "payment.expired" | "payment.under_review" | "payment.reversed" | "payment.partially_refunded" | "payment.refunded" | "virtual_account.created" | "virtual_account.updated" | "virtual_account.closed" | "transfer.created" | "transfer.processing" | "transfer.succeeded" | "transfer.failed" | "transfer.reversed" | "transfer_batch.processing" | "transfer_batch.completed" | "settlement.created" | "settlement.completed" | "settlement.failed" | "balance.funded" | "refund.created" | "refund.succeeded" | "refund.failed" | "checkout.session.completed" | "checkout.session.expired" | "invoice.created" | "invoice.finalized" | "invoice.paid" | "invoice.voided" | "invoice.marked_uncollectible" | "subscription.created" | "subscription.updated" | "subscription.past_due" | "subscription.canceled" | "report.ready" | "report.failed" | "risk.event_flagged" | "webhook.test")[];
             description?: string;
             /** @enum {string} */
             status?: "enabled" | "disabled";
@@ -5419,6 +6030,16 @@ export interface components {
              * @example 5000000
              */
             amount: number;
+            /**
+             * @description Name of the simulated sender
+             * @example ADA OBI
+             */
+            sender_name?: string;
+            /**
+             * @description Account number of the simulated sender. Refunds go back to the sender, so a test value here (see the sandbox test values) lets you test refund outcomes.
+             * @example 0100000003
+             */
+            sender_account_number?: string;
         };
         /** @description Every error response. Program against `error.type` and `error.code`; `message` is for humans and may change. */
         Error: {
@@ -5474,7 +6095,7 @@ export interface components {
             /** @example 9000002140 */
             account_number: string;
             /**
-             * @description Account name; payers see it prefixed by the business short name (e.g. "IPC/Ada Stores Ltd")
+             * @description Account name payers see when they look up the account
              * @example Ada Stores Ltd
              */
             account_name: string;
@@ -5613,6 +6234,35 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        /** @description A saved transfer recipient. Pay it with `beneficiary_id` on Create a transfer. */
+        Beneficiary: {
+            /** @example ben_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
+            id: string;
+            /** @constant */
+            object: "beneficiary";
+            livemode: boolean;
+            bank_code: string;
+            /** @description Bank name for display (null if the list of banks is unavailable) */
+            bank_name: string | null;
+            account_number: string;
+            /** @description The account name, as last resolved */
+            account_name: string;
+            nickname: string | null;
+            /**
+             * @description `transfer`: saved automatically by a successful transfer. `manual`: added by you.
+             * @enum {string}
+             */
+            source: "manual" | "transfer";
+            /**
+             * Format: date-time
+             * @description When the latest successful transfer to this account completed
+             */
+            last_paid_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         /** @description Money sent from your available balance to a bank account. */
         Transfer: {
             /** @example trf_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
@@ -5623,8 +6273,12 @@ export interface components {
             reference: string;
             /** @description Minor units (kobo for NGN) */
             amount: number;
-            /** @description Fees charged to you for this transfer (transfer fee, stamp duty, platform fee) */
+            /** @description Everything charged to you for this transfer: transfer_charge + stamp_duty */
             fee: number;
+            /** @description The transfer charge (a separate line in your balance history) */
+            transfer_charge: number;
+            /** @description Stamp duty on transfers of ₦10,000 or more (a separate line in your balance history) */
+            stamp_duty: number;
             /** @description amount + fee, debited from your available balance */
             total_debit: number;
             /** @enum {string} */
@@ -5642,6 +6296,7 @@ export interface components {
                 account_name: string | null;
             };
             narration: string;
+            batch?: null | string;
             session_id: string | null;
             failure_reason: string | null;
             metadata: {
@@ -5651,6 +6306,103 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             completed_at: string | null;
+        };
+        /** @description A bulk transfer: many payouts checked, reviewed and sent together. Sent with `transfer_batch.processing` and `transfer_batch.completed`. */
+        TransferBatch: {
+            /** @example tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
+            id: string;
+            /** @constant */
+            object: "transfer_batch";
+            livemode: boolean;
+            reference: string;
+            name: string | null;
+            /**
+             * @description draft: rows can be added. validating: accounts are being checked. ready: can be submitted. processing: held and being sent. completed / partially_completed / failed: every transfer is final.
+             * @enum {string}
+             */
+            status: "draft" | "validating" | "ready" | "processing" | "completed" | "partially_completed" | "failed" | "cancelled";
+            /** @enum {string} */
+            source: "api" | "dashboard";
+            /** @enum {string} */
+            currency: "NGN";
+            /** @description Rows, not counting removed ones */
+            item_count: number;
+            /** @description Rows in each status */
+            counts: {
+                validating: number;
+                valid: number;
+                invalid: number;
+                removed: number;
+                queued: number;
+                processing: number;
+                succeeded: number;
+                failed: number;
+                reversed: number;
+            };
+            /** @description Sum of the rows to send (not invalid or removed) */
+            total_amount: number;
+            /** @description Their transfer charges and stamp duty */
+            total_fees: number;
+            /** @description total_amount + total_fees: what submit holds */
+            total_debit: number;
+            /** @description What was held at submit (0 before) */
+            reserved_amount: number;
+            failure_reason: string | null;
+            metadata: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            submitted_at: string | null;
+            /** Format: date-time */
+            completed_at: string | null;
+            /** Format: date-time */
+            cancelled_at: string | null;
+        };
+        /** @description One row of a bulk transfer. Once sent, it takes its transfer’s status. */
+        TransferBatchItem: {
+            /** @example tbi_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
+            id: string;
+            /** @constant */
+            object: "transfer_batch_item";
+            /** @example tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
+            batch: string;
+            /** @description Row number, in upload order (from 1) */
+            index: number;
+            /**
+             * @description Once sent, the row takes its transfer’s status.
+             * @enum {string}
+             */
+            status: "validating" | "valid" | "invalid" | "removed" | "queued" | "processing" | "succeeded" | "failed" | "reversed";
+            bank_code: string;
+            /** @description Bank name for display (null if the list of banks is unavailable) */
+            bank_name: string | null;
+            /** @example 0123456789 */
+            account_number: string;
+            /** @description The account holder’s name (name enquiry) */
+            account_name: string | null;
+            /** @description Minor units (kobo for NGN) */
+            amount: number;
+            /** @description Transfer charge + stamp duty for this row */
+            fee: number;
+            /** @description Minor units (kobo for NGN) */
+            total_debit: number;
+            narration: string;
+            /** @description Becomes the transfer’s reference */
+            reference: string;
+            metadata: {
+                [key: string]: string;
+            };
+            /** @description Why the row is invalid or was not sent */
+            error: null | {
+                code: string;
+                message: string;
+            };
+            /** @description The transfer, once the row is sent */
+            transfer: null | string;
+            /** Format: date-time */
+            created_at: string;
         };
         /** @description Money returned for a payment by bank transfer. */
         Refund: {
@@ -6067,7 +6819,7 @@ export interface components {
             period_end: string;
             balances: {
                 /** @enum {string} */
-                balance: "available" | "pending" | "held" | "unapplied" | "settling";
+                balance: "available" | "pending" | "held" | "unapplied" | "settling" | "reserved";
                 opening: number;
                 credits: number;
                 debits: number;
@@ -6106,6 +6858,8 @@ export interface components {
             unapplied: number;
             /** @description Minor units (kobo for NGN) */
             settling: number;
+            /** @description Held for bulk transfers that are being sent */
+            reserved: number;
             /** @description Minor units (kobo for NGN) */
             total: number;
             /** @description Lifetime amount paid out by completed settlements */
@@ -6124,7 +6878,7 @@ export interface components {
             currency: "NGN";
             /** @description Signed net effect on your balances (minor units) */
             net_amount: number;
-            /** @description Signed change per balance: available, pending, held, unapplied, settling */
+            /** @description Signed change per balance: available, pending, held, unapplied, settling, reserved */
             balance_changes: {
                 [key: string]: number;
             };
@@ -6132,6 +6886,38 @@ export interface components {
                 object: string;
                 id: string;
             };
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description Money you sent to your own funding account to top up your balance. Sent with the `balance.funded` event once it is available. */
+        BalanceFunding: {
+            /** @example fnd_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
+            id: string;
+            /** @constant */
+            object: "balance_funding";
+            livemode: boolean;
+            /**
+             * @description pending: received, not yet in your available balance. available: added to it.
+             * @enum {string}
+             */
+            status: "pending" | "available";
+            /** @enum {string} */
+            currency: "NGN";
+            /** @description What you sent (minor units) */
+            amount: number;
+            /** @description Transfer charge on the top-up */
+            fee: number;
+            /** @description Stamp duty (₦10,000 and above) */
+            stamp_duty: number;
+            /** @description Added to your balance: amount − fee − stamp_duty */
+            net_amount: number;
+            sender: null | {
+                name: string | null;
+                account_number: string | null;
+                bank_name: string | null;
+            };
+            /** Format: date-time */
+            available_at: string;
             /** Format: date-time */
             created_at: string;
         };
@@ -6237,6 +7023,17 @@ export interface components {
             /** @description Minor units (kobo for NGN) */
             amount: number;
         };
+        SandboxTestValues: {
+            /** @constant */
+            object: "sandbox_test_values";
+            /** @description Recipient account numbers starting with this are never found */
+            not_found_prefix: string;
+            /** @description Payout and refund recipient account numbers with a fixed outcome in test mode */
+            recipient_accounts: {
+                account_number: string;
+                outcome: string;
+            }[];
+        };
         /** @description A payout of available balance to a settlement account. */
         Settlement: {
             /** @example stl_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
@@ -6254,9 +7051,12 @@ export interface components {
             amount: number;
             /** @description Platform settlement fee */
             fee: number;
-            /** @description Transfer fee (when passed through) */
+            /** @description The settlement transfer charge */
             transfer_fee: number;
-            /** @description 7.5% VAT on the transfer fee (when passed through) */
+            /**
+             * @deprecated
+             * @description Deprecated: always 0. Use transfer_fee.
+             */
             transfer_fee_vat: number;
             /** @description Minor units (kobo for NGN) */
             stamp_duty: number;
@@ -6559,6 +7359,36 @@ export interface components {
                 object: components["schemas"]["Transfer"];
             };
         };
+        Event_transfer_batch_processing: {
+            /** @example evt_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
+            id: string;
+            /** @constant */
+            object: "event";
+            /** @constant */
+            type: "transfer_batch.processing";
+            api_version: string;
+            livemode: boolean;
+            /** Format: date-time */
+            created_at: string;
+            data: {
+                object: components["schemas"]["TransferBatch"];
+            };
+        };
+        Event_transfer_batch_completed: {
+            /** @example evt_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
+            id: string;
+            /** @constant */
+            object: "event";
+            /** @constant */
+            type: "transfer_batch.completed";
+            api_version: string;
+            livemode: boolean;
+            /** Format: date-time */
+            created_at: string;
+            data: {
+                object: components["schemas"]["TransferBatch"];
+            };
+        };
         Event_settlement_created: {
             /** @example evt_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
             id: string;
@@ -6602,6 +7432,21 @@ export interface components {
             created_at: string;
             data: {
                 object: components["schemas"]["Settlement"];
+            };
+        };
+        Event_balance_funded: {
+            /** @example evt_01J8Z5X7Q9K2M4N6P8R0S2T4V6 */
+            id: string;
+            /** @constant */
+            object: "event";
+            /** @constant */
+            type: "balance.funded";
+            api_version: string;
+            livemode: boolean;
+            /** Format: date-time */
+            created_at: string;
+            data: {
+                object: components["schemas"]["BalanceFunding"];
             };
         };
         Event_refund_created: {
@@ -11379,6 +12224,8 @@ export interface operations {
                 created?: components["schemas"]["DateRangeFilter"];
                 /** @description Only objects with this status. */
                 status?: "pending" | "processing" | "succeeded" | "failed" | "reversed";
+                /** @description Search: a transfer id (trf_…, exact), your reference (starts with), the beneficiary account number (starts with), or the session id (exact) */
+                q?: string;
             };
             header?: {
                 /** @description Dated API version. Defaults to the version pinned on your organization. */
@@ -11406,8 +12253,10 @@ export interface operations {
                      *           "livemode": false,
                      *           "reference": "PAYOUT-2026-0001",
                      *           "amount": 2500000,
-                     *           "fee": 1500,
-                     *           "total_debit": 2501500,
+                     *           "fee": 7000,
+                     *           "transfer_charge": 2000,
+                     *           "stamp_duty": 5000,
+                     *           "total_debit": 2507000,
                      *           "currency": "NGN",
                      *           "status": "processing",
                      *           "beneficiary": {
@@ -11598,8 +12447,10 @@ export interface operations {
                      *         "livemode": false,
                      *         "reference": "PAYOUT-2026-0001",
                      *         "amount": 2500000,
-                     *         "fee": 1500,
-                     *         "total_debit": 2501500,
+                     *         "fee": 7000,
+                     *         "transfer_charge": 2000,
+                     *         "stamp_duty": 5000,
+                     *         "total_debit": 2507000,
                      *         "currency": "NGN",
                      *         "status": "processing",
                      *         "beneficiary": {
@@ -11831,8 +12682,10 @@ export interface operations {
                      *         "livemode": false,
                      *         "reference": "PAYOUT-2026-0001",
                      *         "amount": 2500000,
-                     *         "fee": 1500,
-                     *         "total_debit": 2501500,
+                     *         "fee": 7000,
+                     *         "transfer_charge": 2000,
+                     *         "stamp_duty": 5000,
+                     *         "total_debit": 2507000,
                      *         "currency": "NGN",
                      *         "status": "processing",
                      *         "beneficiary": {
@@ -12019,8 +12872,10 @@ export interface operations {
                      *         "livemode": false,
                      *         "reference": "PAYOUT-2026-0001",
                      *         "amount": 2500000,
-                     *         "fee": 1500,
-                     *         "total_debit": 2501500,
+                     *         "fee": 7000,
+                     *         "transfer_charge": 2000,
+                     *         "stamp_duty": 5000,
+                     *         "total_debit": 2507000,
                      *         "currency": "NGN",
                      *         "status": "processing",
                      *         "beneficiary": {
@@ -12523,6 +13378,3242 @@ export interface operations {
             };
         };
     };
+    listTransferBatches: {
+        parameters: {
+            query?: {
+                /** @description Number of objects to return */
+                limit?: number;
+                /** @description Cursor: return objects created before this object id (older) */
+                starting_after?: string;
+                /** @description Cursor: return objects created after this object id (newer) */
+                ending_before?: string;
+                /** @description Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z */
+                created?: components["schemas"]["DateRangeFilter"];
+                /** @description Only objects with this status. */
+                status?: "draft" | "validating" | "ready" | "processing" | "completed" | "partially_completed" | "failed" | "cancelled";
+            };
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of bulk transfers, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batchs retrieved",
+                     *       "data": [
+                     *         {
+                     *           "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *           "object": "transfer_batch",
+                     *           "livemode": false,
+                     *           "reference": "string",
+                     *           "name": "string",
+                     *           "status": "draft",
+                     *           "source": "api",
+                     *           "currency": "NGN",
+                     *           "item_count": 0,
+                     *           "counts": {
+                     *             "validating": 0,
+                     *             "valid": 0,
+                     *             "invalid": 0,
+                     *             "removed": 0,
+                     *             "queued": 0,
+                     *             "processing": 0,
+                     *             "succeeded": 0,
+                     *             "failed": 0,
+                     *             "reversed": 0
+                     *           },
+                     *           "total_amount": 0,
+                     *           "total_fees": 0,
+                     *           "total_debit": 0,
+                     *           "reserved_amount": 0,
+                     *           "failure_reason": "string",
+                     *           "metadata": {},
+                     *           "created_at": "2026-09-24T18:00:00.000Z",
+                     *           "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *           "completed_at": "2026-09-24T18:00:00.000Z",
+                     *           "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *         }
+                     *       ],
+                     *       "meta": {
+                     *         "has_more": false,
+                     *         "next_cursor": null,
+                     *         "url": "/api/v1/transfer-batches"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatch"][];
+                        meta: components["schemas"]["ListMeta"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createTransferBatch: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+                /** @description Required. A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours. */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "name": "November payroll",
+                 *       "reference": "PAYROLL-2026-11",
+                 *       "items": [
+                 *         {
+                 *           "bank_code": "058",
+                 *           "account_number": "0123456789",
+                 *           "amount": 25000000,
+                 *           "narration": "November salary"
+                 *         },
+                 *         {
+                 *           "bank_code": "044",
+                 *           "account_number": "9876543210",
+                 *           "amount": 18000000,
+                 *           "reference": "PAYROLL-2026-11-EMP-42"
+                 *         }
+                 *       ],
+                 *       "validate": true
+                 *     }
+                 */
+                "application/json": components["schemas"]["CreateTransferBatchDto"];
+            };
+        };
+        responses: {
+            /** @description The new bulk transfer, `draft` (or `validating`). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batch created",
+                     *       "data": {
+                     *         "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "object": "transfer_batch",
+                     *         "livemode": false,
+                     *         "reference": "string",
+                     *         "name": "string",
+                     *         "status": "draft",
+                     *         "source": "api",
+                     *         "currency": "NGN",
+                     *         "item_count": 0,
+                     *         "counts": {
+                     *           "validating": 0,
+                     *           "valid": 0,
+                     *           "invalid": 0,
+                     *           "removed": 0,
+                     *           "queued": 0,
+                     *           "processing": 0,
+                     *           "succeeded": 0,
+                     *           "failed": 0,
+                     *           "reversed": 0
+                     *         },
+                     *         "total_amount": 0,
+                     *         "total_fees": 0,
+                     *         "total_debit": 0,
+                     *         "reserved_amount": 0,
+                     *         "failure_reason": "string",
+                     *         "metadata": {},
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *         "completed_at": "2026-09-24T18:00:00.000Z",
+                     *         "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatch"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description Conflict (duplicate reference, invalid state, request in progress)
+             *
+             *     A request with this Idempotency-Key is still in progress
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "A payment with reference ORDER-12345 already exists",
+                     *       "error": {
+                     *         "type": "conflict",
+                     *         "code": "duplicate_reference",
+                     *         "param": "reference"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency-Key reused with a different request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "This Idempotency-Key was used with a different request",
+                     *       "error": {
+                     *         "type": "idempotency_error",
+                     *         "code": "idempotency_key_reused",
+                     *         "param": "Idempotency-Key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getTransferBatch: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path: {
+                /** @description The bulk transfer id (`tb_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bulk transfer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batch retrieved",
+                     *       "data": {
+                     *         "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "object": "transfer_batch",
+                     *         "livemode": false,
+                     *         "reference": "string",
+                     *         "name": "string",
+                     *         "status": "draft",
+                     *         "source": "api",
+                     *         "currency": "NGN",
+                     *         "item_count": 0,
+                     *         "counts": {
+                     *           "validating": 0,
+                     *           "valid": 0,
+                     *           "invalid": 0,
+                     *           "removed": 0,
+                     *           "queued": 0,
+                     *           "processing": 0,
+                     *           "succeeded": 0,
+                     *           "failed": 0,
+                     *           "reversed": 0
+                     *         },
+                     *         "total_amount": 0,
+                     *         "total_fees": 0,
+                     *         "total_debit": 0,
+                     *         "reserved_amount": 0,
+                     *         "failure_reason": "string",
+                     *         "metadata": {},
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *         "completed_at": "2026-09-24T18:00:00.000Z",
+                     *         "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatch"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listTransferBatchItems: {
+        parameters: {
+            query?: {
+                /** @description Number of rows to return */
+                limit?: number;
+                /** @description Cursor: return rows after this row id (rows are in upload order) */
+                starting_after?: string;
+                /** @description Only objects with this status. */
+                status?: "validating" | "valid" | "invalid" | "removed" | "queued" | "processing" | "succeeded" | "failed" | "reversed";
+            };
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path: {
+                /** @description The bulk transfer id (`tb_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of rows, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batch items retrieved",
+                     *       "data": [
+                     *         {
+                     *           "id": "tbi_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *           "object": "transfer_batch_item",
+                     *           "batch": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *           "index": 0,
+                     *           "status": "validating",
+                     *           "bank_code": "string",
+                     *           "bank_name": "string",
+                     *           "account_number": "0123456789",
+                     *           "account_name": "string",
+                     *           "amount": 0,
+                     *           "fee": 0,
+                     *           "total_debit": 0,
+                     *           "narration": "string",
+                     *           "reference": "string",
+                     *           "metadata": {},
+                     *           "error": {
+                     *             "code": "string",
+                     *             "message": "string"
+                     *           },
+                     *           "transfer": "trf_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *           "created_at": "2026-09-24T18:00:00.000Z"
+                     *         }
+                     *       ],
+                     *       "meta": {
+                     *         "has_more": false,
+                     *         "next_cursor": null,
+                     *         "url": "/api/v1/transfer-batches"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatchItem"][];
+                        meta: components["schemas"]["ListMeta"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    addTransferBatchItems: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+                /** @description Required. A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours. */
+                "Idempotency-Key": string;
+            };
+            path: {
+                /** @description The bulk transfer id (`tb_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "items": [
+                 *         {
+                 *           "bank_code": "058",
+                 *           "account_number": "0123456789",
+                 *           "amount": 25000000,
+                 *           "narration": "November salary"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": components["schemas"]["AddBatchItemsDto"];
+            };
+        };
+        responses: {
+            /** @description The bulk transfer with its new totals. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batch created",
+                     *       "data": {
+                     *         "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "object": "transfer_batch",
+                     *         "livemode": false,
+                     *         "reference": "string",
+                     *         "name": "string",
+                     *         "status": "draft",
+                     *         "source": "api",
+                     *         "currency": "NGN",
+                     *         "item_count": 0,
+                     *         "counts": {
+                     *           "validating": 0,
+                     *           "valid": 0,
+                     *           "invalid": 0,
+                     *           "removed": 0,
+                     *           "queued": 0,
+                     *           "processing": 0,
+                     *           "succeeded": 0,
+                     *           "failed": 0,
+                     *           "reversed": 0
+                     *         },
+                     *         "total_amount": 0,
+                     *         "total_fees": 0,
+                     *         "total_debit": 0,
+                     *         "reserved_amount": 0,
+                     *         "failure_reason": "string",
+                     *         "metadata": {},
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *         "completed_at": "2026-09-24T18:00:00.000Z",
+                     *         "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatch"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description Conflict (duplicate reference, invalid state, request in progress)
+             *
+             *     A request with this Idempotency-Key is still in progress
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "A payment with reference ORDER-12345 already exists",
+                     *       "error": {
+                     *         "type": "conflict",
+                     *         "code": "duplicate_reference",
+                     *         "param": "reference"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency-Key reused with a different request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "This Idempotency-Key was used with a different request",
+                     *       "error": {
+                     *         "type": "idempotency_error",
+                     *         "code": "idempotency_key_reused",
+                     *         "param": "Idempotency-Key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    removeTransferBatchItem: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path: {
+                /** @description The bulk transfer id (`tb_…`). */
+                id: string;
+                /** @description The row id (`tbi_…`). */
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bulk transfer with its new totals. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batch deleted",
+                     *       "data": {
+                     *         "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "object": "transfer_batch",
+                     *         "livemode": false,
+                     *         "reference": "string",
+                     *         "name": "string",
+                     *         "status": "draft",
+                     *         "source": "api",
+                     *         "currency": "NGN",
+                     *         "item_count": 0,
+                     *         "counts": {
+                     *           "validating": 0,
+                     *           "valid": 0,
+                     *           "invalid": 0,
+                     *           "removed": 0,
+                     *           "queued": 0,
+                     *           "processing": 0,
+                     *           "succeeded": 0,
+                     *           "failed": 0,
+                     *           "reversed": 0
+                     *         },
+                     *         "total_amount": 0,
+                     *         "total_fees": 0,
+                     *         "total_debit": 0,
+                     *         "reserved_amount": 0,
+                     *         "failure_reason": "string",
+                     *         "metadata": {},
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *         "completed_at": "2026-09-24T18:00:00.000Z",
+                     *         "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatch"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Conflict (duplicate reference, invalid state, request in progress) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "A payment with reference ORDER-12345 already exists",
+                     *       "error": {
+                     *         "type": "conflict",
+                     *         "code": "duplicate_reference",
+                     *         "param": "reference"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateTransferBatchItem: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+                /** @description A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description The bulk transfer id (`tb_…`). */
+                id: string;
+                /** @description The row id (`tbi_…`). */
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "account_number": "0123456780"
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdateBatchItemDto"];
+            };
+        };
+        responses: {
+            /** @description The updated row. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batch item updated",
+                     *       "data": {
+                     *         "id": "tbi_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "object": "transfer_batch_item",
+                     *         "batch": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "index": 0,
+                     *         "status": "validating",
+                     *         "bank_code": "string",
+                     *         "bank_name": "string",
+                     *         "account_number": "0123456789",
+                     *         "account_name": "string",
+                     *         "amount": 0,
+                     *         "fee": 0,
+                     *         "total_debit": 0,
+                     *         "narration": "string",
+                     *         "reference": "string",
+                     *         "metadata": {},
+                     *         "error": {
+                     *           "code": "string",
+                     *           "message": "string"
+                     *         },
+                     *         "transfer": "trf_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "created_at": "2026-09-24T18:00:00.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatchItem"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description Conflict (duplicate reference, invalid state, request in progress)
+             *
+             *     A request with this Idempotency-Key is still in progress
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "A payment with reference ORDER-12345 already exists",
+                     *       "error": {
+                     *         "type": "conflict",
+                     *         "code": "duplicate_reference",
+                     *         "param": "reference"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency-Key reused with a different request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "This Idempotency-Key was used with a different request",
+                     *       "error": {
+                     *         "type": "idempotency_error",
+                     *         "code": "idempotency_key_reused",
+                     *         "param": "Idempotency-Key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    validateTransferBatch: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+                /** @description A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description The bulk transfer id (`tb_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bulk transfer, `validating`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Request successful",
+                     *       "data": {
+                     *         "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "object": "transfer_batch",
+                     *         "livemode": false,
+                     *         "reference": "string",
+                     *         "name": "string",
+                     *         "status": "draft",
+                     *         "source": "api",
+                     *         "currency": "NGN",
+                     *         "item_count": 0,
+                     *         "counts": {
+                     *           "validating": 0,
+                     *           "valid": 0,
+                     *           "invalid": 0,
+                     *           "removed": 0,
+                     *           "queued": 0,
+                     *           "processing": 0,
+                     *           "succeeded": 0,
+                     *           "failed": 0,
+                     *           "reversed": 0
+                     *         },
+                     *         "total_amount": 0,
+                     *         "total_fees": 0,
+                     *         "total_debit": 0,
+                     *         "reserved_amount": 0,
+                     *         "failure_reason": "string",
+                     *         "metadata": {},
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *         "completed_at": "2026-09-24T18:00:00.000Z",
+                     *         "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatch"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description Conflict (duplicate reference, invalid state, request in progress)
+             *
+             *     A request with this Idempotency-Key is still in progress
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "A payment with reference ORDER-12345 already exists",
+                     *       "error": {
+                     *         "type": "conflict",
+                     *         "code": "duplicate_reference",
+                     *         "param": "reference"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency-Key reused with a different request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "This Idempotency-Key was used with a different request",
+                     *       "error": {
+                     *         "type": "idempotency_error",
+                     *         "code": "idempotency_key_reused",
+                     *         "param": "Idempotency-Key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    submitTransferBatch: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+                /** @description Required. A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours. */
+                "Idempotency-Key": string;
+            };
+            path: {
+                /** @description The bulk transfer id (`tb_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bulk transfer, `processing`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batch submitted",
+                     *       "data": {
+                     *         "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "object": "transfer_batch",
+                     *         "livemode": false,
+                     *         "reference": "string",
+                     *         "name": "string",
+                     *         "status": "draft",
+                     *         "source": "api",
+                     *         "currency": "NGN",
+                     *         "item_count": 0,
+                     *         "counts": {
+                     *           "validating": 0,
+                     *           "valid": 0,
+                     *           "invalid": 0,
+                     *           "removed": 0,
+                     *           "queued": 0,
+                     *           "processing": 0,
+                     *           "succeeded": 0,
+                     *           "failed": 0,
+                     *           "reversed": 0
+                     *         },
+                     *         "total_amount": 0,
+                     *         "total_fees": 0,
+                     *         "total_debit": 0,
+                     *         "reserved_amount": 0,
+                     *         "failure_reason": "string",
+                     *         "metadata": {},
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *         "completed_at": "2026-09-24T18:00:00.000Z",
+                     *         "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatch"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description Conflict (duplicate reference, invalid state, request in progress)
+             *
+             *     A request with this Idempotency-Key is still in progress
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "A payment with reference ORDER-12345 already exists",
+                     *       "error": {
+                     *         "type": "conflict",
+                     *         "code": "duplicate_reference",
+                     *         "param": "reference"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency-Key reused with a different request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "This Idempotency-Key was used with a different request",
+                     *       "error": {
+                     *         "type": "idempotency_error",
+                     *         "code": "idempotency_key_reused",
+                     *         "param": "Idempotency-Key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The service is temporarily unavailable. Nothing was sent or created; retry later with the same Idempotency-Key */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "The service is temporarily unavailable. Nothing was sent or created; retry shortly.",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "service_unavailable"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    cancelTransferBatch: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+                /** @description A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                /** @description The bulk transfer id (`tb_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bulk transfer, `cancelled`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Transfer batch canceled",
+                     *       "data": {
+                     *         "id": "tb_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *         "object": "transfer_batch",
+                     *         "livemode": false,
+                     *         "reference": "string",
+                     *         "name": "string",
+                     *         "status": "draft",
+                     *         "source": "api",
+                     *         "currency": "NGN",
+                     *         "item_count": 0,
+                     *         "counts": {
+                     *           "validating": 0,
+                     *           "valid": 0,
+                     *           "invalid": 0,
+                     *           "removed": 0,
+                     *           "queued": 0,
+                     *           "processing": 0,
+                     *           "succeeded": 0,
+                     *           "failed": 0,
+                     *           "reversed": 0
+                     *         },
+                     *         "total_amount": 0,
+                     *         "total_fees": 0,
+                     *         "total_debit": 0,
+                     *         "reserved_amount": 0,
+                     *         "failure_reason": "string",
+                     *         "metadata": {},
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "submitted_at": "2026-09-24T18:00:00.000Z",
+                     *         "completed_at": "2026-09-24T18:00:00.000Z",
+                     *         "cancelled_at": "2026-09-24T18:00:00.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["TransferBatch"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description Conflict (duplicate reference, invalid state, request in progress)
+             *
+             *     A request with this Idempotency-Key is still in progress
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "A payment with reference ORDER-12345 already exists",
+                     *       "error": {
+                     *         "type": "conflict",
+                     *         "code": "duplicate_reference",
+                     *         "param": "reference"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency-Key reused with a different request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "This Idempotency-Key was used with a different request",
+                     *       "error": {
+                     *         "type": "idempotency_error",
+                     *         "code": "idempotency_key_reused",
+                     *         "param": "Idempotency-Key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listBeneficiaries: {
+        parameters: {
+            query?: {
+                /** @description Number of objects to return */
+                limit?: number;
+                /** @description Cursor: return objects created before this object id (older) */
+                starting_after?: string;
+                /** @description Cursor: return objects created after this object id (newer) */
+                ending_before?: string;
+                /** @description Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z */
+                created?: components["schemas"]["DateRangeFilter"];
+                /** @description Search: a beneficiary id (ben_…, exact), an account number (starts with), or part of the account name or nickname */
+                q?: string;
+            };
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of beneficiaries, newest first, in `data`. Pass `meta.next_cursor` as `starting_after` to fetch the next page; it is `null` on the last one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Beneficiaries retrieved",
+                     *       "data": [
+                     *         {
+                     *           "id": "ben_01J8Z5X7Q9K2M4N6P8R0S2T4W7",
+                     *           "object": "beneficiary",
+                     *           "livemode": false,
+                     *           "bank_code": "058",
+                     *           "bank_name": "Guaranty Trust Bank",
+                     *           "account_number": "0123456789",
+                     *           "account_name": "ADA VENDOR ENTERPRISES",
+                     *           "nickname": "Office rent",
+                     *           "source": "transfer",
+                     *           "last_paid_at": "2026-09-24T18:04:12.000Z",
+                     *           "created_at": "2026-09-24T18:00:00.000Z",
+                     *           "updated_at": "2026-09-24T18:04:12.000Z"
+                     *         }
+                     *       ],
+                     *       "meta": {
+                     *         "has_more": false,
+                     *         "next_cursor": null,
+                     *         "url": "/api/v1/beneficiaries"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["Beneficiary"][];
+                        meta: components["schemas"]["ListMeta"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createBeneficiary: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+                /** @description A unique key for this request (1–255 printable ASCII characters). A retry with the same key and body returns the original response, with `Idempotent-Replayed: true`, instead of acting twice. Keys expire after 24 hours. */
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "bank_code": "058",
+                 *       "account_number": "0123456789",
+                 *       "nickname": "Office rent"
+                 *     }
+                 */
+                "application/json": components["schemas"]["CreateBeneficiaryDto"];
+            };
+        };
+        responses: {
+            /** @description The new beneficiary. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Beneficiary created",
+                     *       "data": {
+                     *         "id": "ben_01J8Z5X7Q9K2M4N6P8R0S2T4W7",
+                     *         "object": "beneficiary",
+                     *         "livemode": false,
+                     *         "bank_code": "058",
+                     *         "bank_name": "Guaranty Trust Bank",
+                     *         "account_number": "0123456789",
+                     *         "account_name": "ADA VENDOR ENTERPRISES",
+                     *         "nickname": "Office rent",
+                     *         "source": "transfer",
+                     *         "last_paid_at": "2026-09-24T18:04:12.000Z",
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "updated_at": "2026-09-24T18:04:12.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["Beneficiary"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /**
+             * @description Conflict (duplicate reference, invalid state, request in progress)
+             *
+             *     A request with this Idempotency-Key is still in progress
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "A payment with reference ORDER-12345 already exists",
+                     *       "error": {
+                     *         "type": "conflict",
+                     *         "code": "duplicate_reference",
+                     *         "param": "reference"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Idempotency-Key reused with a different request */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "This Idempotency-Key was used with a different request",
+                     *       "error": {
+                     *         "type": "idempotency_error",
+                     *         "code": "idempotency_key_reused",
+                     *         "param": "Idempotency-Key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The service is temporarily unavailable. Nothing was sent or created; retry later with the same Idempotency-Key */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "The service is temporarily unavailable. Nothing was sent or created; retry shortly.",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "service_unavailable"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getBeneficiary: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path: {
+                /** @description The beneficiary id (`ben_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The beneficiary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Beneficiary retrieved",
+                     *       "data": {
+                     *         "id": "ben_01J8Z5X7Q9K2M4N6P8R0S2T4W7",
+                     *         "object": "beneficiary",
+                     *         "livemode": false,
+                     *         "bank_code": "058",
+                     *         "bank_name": "Guaranty Trust Bank",
+                     *         "account_number": "0123456789",
+                     *         "account_name": "ADA VENDOR ENTERPRISES",
+                     *         "nickname": "Office rent",
+                     *         "source": "transfer",
+                     *         "last_paid_at": "2026-09-24T18:04:12.000Z",
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "updated_at": "2026-09-24T18:04:12.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["Beneficiary"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteBeneficiary: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path: {
+                /** @description The beneficiary id (`ben_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Confirmation that the beneficiary was deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Webhook endpoint deleted",
+                     *       "data": {
+                     *         "id": "we_01J8Z5X7Q9K2M4N6P8R0S2T4VB",
+                     *         "object": "webhook_endpoint",
+                     *         "deleted": true
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["DeletedObject"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateBeneficiary: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path: {
+                /** @description The beneficiary id (`ben_…`). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "nickname": "Landlord"
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdateBeneficiaryDto"];
+            };
+        };
+        responses: {
+            /** @description The updated beneficiary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Beneficiary updated",
+                     *       "data": {
+                     *         "id": "ben_01J8Z5X7Q9K2M4N6P8R0S2T4W7",
+                     *         "object": "beneficiary",
+                     *         "livemode": false,
+                     *         "bank_code": "058",
+                     *         "bank_name": "Guaranty Trust Bank",
+                     *         "account_number": "0123456789",
+                     *         "account_name": "ADA VENDOR ENTERPRISES",
+                     *         "nickname": "Office rent",
+                     *         "source": "transfer",
+                     *         "last_paid_at": "2026-09-24T18:04:12.000Z",
+                     *         "created_at": "2026-09-24T18:00:00.000Z",
+                     *         "updated_at": "2026-09-24T18:04:12.000Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["Beneficiary"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "No such payment: pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
+                     *       "error": {
+                     *         "type": "not_found",
+                     *         "code": "resource_missing",
+                     *         "param": "id"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     listSettlements: {
         parameters: {
             query?: {
@@ -12568,10 +16659,10 @@ export interface operations {
                      *           "trigger": "scheduled",
                      *           "amount": 31480000,
                      *           "fee": 0,
-                     *           "transfer_fee": 1500,
-                     *           "transfer_fee_vat": 113,
+                     *           "transfer_fee": 2500,
+                     *           "transfer_fee_vat": 0,
                      *           "stamp_duty": 5000,
-                     *           "total_deducted": 31486613,
+                     *           "total_deducted": 31487500,
                      *           "reserve_retained": 0,
                      *           "currency": "NGN",
                      *           "settlement_account": {
@@ -12748,10 +16839,10 @@ export interface operations {
                      *         "trigger": "scheduled",
                      *         "amount": 31480000,
                      *         "fee": 0,
-                     *         "transfer_fee": 1500,
-                     *         "transfer_fee_vat": 113,
+                     *         "transfer_fee": 2500,
+                     *         "transfer_fee_vat": 0,
                      *         "stamp_duty": 5000,
-                     *         "total_deducted": 31486613,
+                     *         "total_deducted": 31487500,
                      *         "reserve_retained": 0,
                      *         "currency": "NGN",
                      *         "settlement_account": {
@@ -13131,7 +17222,7 @@ export interface operations {
                      *           "payment": "pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
                      *           "reference": "RFND-12345",
                      *           "amount": 1000000,
-                     *           "fee": 1500,
+                     *           "fee": 6613,
                      *           "currency": "NGN",
                      *           "reason": "Customer returned the item",
                      *           "status": "processing",
@@ -13317,7 +17408,7 @@ export interface operations {
                      *         "payment": "pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
                      *         "reference": "RFND-12345",
                      *         "amount": 1000000,
-                     *         "fee": 1500,
+                     *         "fee": 6613,
                      *         "currency": "NGN",
                      *         "reason": "Customer returned the item",
                      *         "status": "processing",
@@ -13551,7 +17642,7 @@ export interface operations {
                      *         "payment": "pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
                      *         "reference": "RFND-12345",
                      *         "amount": 1000000,
-                     *         "fee": 1500,
+                     *         "fee": 6613,
                      *         "currency": "NGN",
                      *         "reason": "Customer returned the item",
                      *         "status": "processing",
@@ -13740,7 +17831,7 @@ export interface operations {
                      *         "payment": "pay_01J8Z5X7Q9K2M4N6P8R0S2T4V6",
                      *         "reference": "RFND-12345",
                      *         "amount": 1000000,
-                     *         "fee": 1500,
+                     *         "fee": 6613,
                      *         "currency": "NGN",
                      *         "reason": "Customer returned the item",
                      *         "status": "processing",
@@ -21576,7 +25667,7 @@ export interface operations {
                 /** @description Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z */
                 created?: components["schemas"]["DateRangeFilter"];
                 /** @description Only objects of this type. */
-                type?: "payment.created" | "payment.pending" | "payment.succeeded" | "payment.failed" | "payment.expired" | "payment.under_review" | "payment.reversed" | "payment.partially_refunded" | "payment.refunded" | "virtual_account.created" | "virtual_account.updated" | "virtual_account.closed" | "transfer.created" | "transfer.processing" | "transfer.succeeded" | "transfer.failed" | "transfer.reversed" | "settlement.created" | "settlement.completed" | "settlement.failed" | "refund.created" | "refund.succeeded" | "refund.failed" | "checkout.session.completed" | "checkout.session.expired" | "invoice.created" | "invoice.finalized" | "invoice.paid" | "invoice.voided" | "invoice.marked_uncollectible" | "subscription.created" | "subscription.updated" | "subscription.past_due" | "subscription.canceled" | "report.ready" | "report.failed" | "risk.event_flagged" | "webhook.test";
+                type?: "payment.created" | "payment.pending" | "payment.succeeded" | "payment.failed" | "payment.expired" | "payment.under_review" | "payment.reversed" | "payment.partially_refunded" | "payment.refunded" | "virtual_account.created" | "virtual_account.updated" | "virtual_account.closed" | "transfer.created" | "transfer.processing" | "transfer.succeeded" | "transfer.failed" | "transfer.reversed" | "transfer_batch.processing" | "transfer_batch.completed" | "settlement.created" | "settlement.completed" | "settlement.failed" | "balance.funded" | "refund.created" | "refund.succeeded" | "refund.failed" | "checkout.session.completed" | "checkout.session.expired" | "invoice.created" | "invoice.finalized" | "invoice.paid" | "invoice.voided" | "invoice.marked_uncollectible" | "subscription.created" | "subscription.updated" | "subscription.past_due" | "subscription.canceled" | "report.ready" | "report.failed" | "risk.event_flagged" | "webhook.test";
                 /** @description Only events about this object (e.g. pay_…) */
                 resource_id?: string;
             };
@@ -22375,6 +26466,7 @@ export interface operations {
                      *         "held": 0,
                      *         "unapplied": 0,
                      *         "settling": 0,
+                     *         "reserved": 0,
                      *         "total": 36450000,
                      *         "settled_total": 120000000
                      *       }
@@ -22507,7 +26599,7 @@ export interface operations {
                 /** @description Filter on creation time, e.g. created[gte]=2026-01-01T00:00:00Z */
                 created?: components["schemas"]["DateRangeFilter"];
                 /** @description Only objects of this type. */
-                type?: "payment_receipt" | "unmatched_receipt" | "unapplied_receipt" | "unapplied_application" | "suspense_assignment" | "funds_release" | "sweep" | "transfer_reserve" | "transfer_complete" | "transfer_release" | "external_debit" | "adjustment" | "reversal" | "settlement_reserve" | "settlement_complete" | "settlement_release" | "split_allocation";
+                type?: "payment_receipt" | "unmatched_receipt" | "unapplied_receipt" | "unapplied_application" | "suspense_assignment" | "funds_release" | "sweep" | "transfer_reserve" | "transfer_complete" | "transfer_release" | "external_debit" | "adjustment" | "reversal" | "settlement_reserve" | "settlement_complete" | "settlement_release" | "split_allocation" | "transfer_charge" | "transfer_charge_release" | "stamp_duty_charge" | "stamp_duty_release" | "settlement_charge" | "settlement_charge_release" | "settlement_stamp_duty" | "settlement_stamp_duty_release" | "balance_funding";
                 /** @description What caused the movement */
                 source?: "payment" | "transfer" | "account_transaction" | "adjustment";
             };
@@ -22838,6 +26930,155 @@ export interface operations {
                      *       "error": {
                      *         "type": "api_error",
                      *         "code": "service_unavailable"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listSandboxTestValues: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Dated API version. Defaults to the version pinned on your organization. */
+                "PletoPay-Version"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test values. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": true,
+                     *       "message": "Sandbox test values retrieved",
+                     *       "data": {
+                     *         "object": "sandbox_test_values",
+                     *         "not_found_prefix": "string",
+                     *         "recipient_accounts": [
+                     *           {
+                     *             "account_number": "string",
+                     *             "outcome": "string"
+                     *           }
+                     *         ]
+                     *       }
+                     *     }
+                     */
+                    "application/json": {
+                        /** @constant */
+                        status: true;
+                        /**
+                         * @description Human-readable outcome
+                         * @example Request successful
+                         */
+                        message: string;
+                        data: components["schemas"]["SandboxTestValues"];
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "amount must not be less than 1",
+                     *       "error": {
+                     *         "type": "invalid_request",
+                     *         "code": "parameter_invalid",
+                     *         "param": "amount"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Invalid API key",
+                     *       "error": {
+                     *         "type": "authentication_error",
+                     *         "code": "invalid_api_key"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Insufficient permissions */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "You do not have permission to perform this action",
+                     *       "error": {
+                     *         "type": "permission_error",
+                     *         "code": "insufficient_permissions"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "Too many requests. Retry after the indicated delay.",
+                     *       "error": {
+                     *         "type": "rate_limit_error",
+                     *         "code": "rate_limited"
+                     *       },
+                     *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unexpected error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": false,
+                     *       "message": "An unexpected error occurred",
+                     *       "error": {
+                     *         "type": "api_error",
+                     *         "code": "internal_error"
                      *       },
                      *       "request_id": "req_01J8Z5X7Q9K2M4N6P8R0S2T4WE"
                      *     }

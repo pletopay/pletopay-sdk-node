@@ -62,6 +62,7 @@ export * from './types';
 export type {
   Balance as BalanceResource,
   Banks,
+  Beneficiaries,
   Checkout,
   CheckoutSessions,
   Customers,
@@ -79,6 +80,7 @@ export type {
   Subaccounts,
   Subscriptions,
   Transactions,
+  TransferBatches,
   Transfers,
   VirtualAccounts,
   WebhookEndpoints,

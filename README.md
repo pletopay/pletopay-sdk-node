@@ -61,7 +61,7 @@ Every method also takes per-call options: `{ idempotencyKey, timeoutMs, maxRetri
 
 ## Resources
 
-Method names follow the API's operation ids. All 82 operations are covered:
+Method names follow the API's operation ids. All 98 operations are covered:
 
 | Resource            | Methods                                                                              |
 | ------------------- | ------------------------------------------------------------------------------------ |
@@ -71,6 +71,9 @@ Method names follow the API's operation ids. All 82 operations are covered:
 | `subaccounts`       | `create` `list` `retrieve` `update` `retrieveBalance`                                |
 | `splitRules`        | `create` `list` `retrieve` `update`                                                  |
 | `transfers`         | `create` `list` `retrieve` `retrieveByReference` `resolveAccount`                    |
+| `beneficiaries`     | `create` `list` `retrieve` `update` `delete`                                         |
+| `transferBatches`   | `create` `list` `retrieve` `listItems` `addItems` `updateItem` `removeItem`          |
+|                     | `validate` `submit` `cancel`                                                         |
 | `banks`             | `list`                                                                               |
 | `settlements`       | `list` `retrieve` `listItems`                                                        |
 | `refunds`           | `create` `list` `retrieve` `retrieveByReference`                                     |
@@ -85,9 +88,9 @@ Method names follow the API's operation ids. All 82 operations are covered:
 | `events`            | `list` `retrieve` `listDeliveries` `replay`                                          |
 | `balance`           | `retrieve`                                                                           |
 | `transactions`      | `list`                                                                               |
-| `sandbox`           | `simulateTransfer` (test mode only; refused locally with a live key)                 |
+| `sandbox`           | `simulateTransfer` `testValues` (test mode only; refused locally with a live key)    |
 
-Request and response shapes are the API's own `snake_case` JSON, typed from the contract: `PaymentCreateParams`, `Payment`, `Transfer`, `CheckoutSession`, … are all exported, so your editor completes every field. **[docs/api-reference.md](docs/api-reference.md)** documents all 82 operations: each request field with its type and whether it is required, the query parameters, the response object and an example. The [developer portal](https://docs.pletopay.com) has the guides.
+Request and response shapes are the API's own `snake_case` JSON, typed from the contract: `PaymentCreateParams`, `Payment`, `Transfer`, `CheckoutSession`, … are all exported, so your editor completes every field. **[docs/api-reference.md](docs/api-reference.md)** documents all 98 operations: each request field with its type and whether it is required, the query parameters, the response object and an example. The [developer portal](https://docs.pletopay.com) has the guides.
 
 ### Checkout
 
@@ -119,6 +122,40 @@ const transfer = await pletopay.transfers.create(
   { idempotencyKey: 'payout-PAYOUT-2026-0001' },
 );
 ```
+
+The recipient of every successful transfer is saved as a beneficiary. Pay one again by id instead of sending the account details; the account name is still checked, and if it no longer matches the saved name nothing is sent (`409 beneficiary_name_changed`):
+
+```ts
+const [saved] = (await pletopay.beneficiaries.list({ q: 'Ada' })).data;
+await pletopay.transfers.create(
+  {
+    amount: 2500000,
+    currency: 'NGN',
+    reference: 'PAYOUT-2026-0002',
+    narration: 'Vendor payout',
+    beneficiary_id: saved.id,
+  },
+  { idempotencyKey: 'payout-PAYOUT-2026-0002' },
+);
+```
+
+### Bulk transfers
+
+```ts
+const batch = await pletopay.transferBatches.create(
+  { name: 'November payroll', reference: 'PAYROLL-2026-11', items: firstThousandRows },
+  { idempotencyKey: 'payroll-2026-11' },
+);
+// More rows, up to 1,000 per call, one key per chunk:
+await pletopay.transferBatches.addItems(batch.id, nextRows, { idempotencyKey: 'payroll-2026-11-chunk-2' });
+await pletopay.transferBatches.validate(batch.id); // checks every account; poll retrieve() until status is 'ready'
+for await (const row of pletopay.transferBatches.listItems(batch.id, { status: 'invalid' })) {
+  /* fix with updateItem() or drop with removeItem() */
+}
+await pletopay.transferBatches.submit(batch.id, { idempotencyKey: 'payroll-2026-11-submit' });
+```
+
+Submitting holds the whole cost of the valid rows at once, or nothing; the rows are then sent in the background. Listen for `transfer_batch.completed`.
 
 The API requires an `Idempotency-Key` on transfers and refunds. Pass your own, deterministic key (your payout id) so a retry from a crashed process can never pay twice. The SDK generates a random key only when you omit it.
 

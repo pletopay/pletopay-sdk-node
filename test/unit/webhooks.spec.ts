@@ -143,7 +143,7 @@ describe('Webhooks class and client integration', () => {
 
   it('knows the event types', () => {
     expect(EVENT_TYPES).toContain('payment.succeeded');
-    expect(EVENT_TYPES).toHaveLength(38);
+    expect(EVENT_TYPES).toHaveLength(41);
     expect(isKnownEventType('payment.succeeded')).toBe(true);
     expect(isKnownEventType('payment.teleported')).toBe(false);
   });

@@ -44,6 +44,8 @@ import { Subaccounts } from './resources/subaccounts';
 import { Subscriptions } from './resources/subscriptions';
 import { Transactions } from './resources/transactions';
 import { Transfers } from './resources/transfers';
+import { TransferBatches } from './resources/transfer-batches';
+import { Beneficiaries } from './resources/beneficiaries';
 import { VirtualAccounts } from './resources/virtual-accounts';
 import { WebhookEndpoints } from './resources/webhook-endpoints';
 import type { ListMeta, OperationData, OperationId, OperationItem } from './types';
@@ -216,6 +218,8 @@ export class Pletopay {
   readonly subaccounts: Subaccounts;
   readonly splitRules: SplitRules;
   readonly transfers: Transfers;
+  readonly transferBatches: TransferBatches;
+  readonly beneficiaries: Beneficiaries;
   readonly banks: Banks;
   readonly settlements: Settlements;
   readonly refunds: Refunds;
@@ -287,6 +291,8 @@ export class Pletopay {
     this.subaccounts = new Subaccounts(this);
     this.splitRules = new SplitRules(this);
     this.transfers = new Transfers(this);
+    this.transferBatches = new TransferBatches(this);
+    this.beneficiaries = new Beneficiaries(this);
     this.banks = new Banks(this);
     this.settlements = new Settlements(this);
     this.refunds = new Refunds(this);
