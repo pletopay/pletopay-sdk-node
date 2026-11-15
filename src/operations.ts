@@ -294,14 +294,14 @@ export const OPERATIONS = {
   updateTransferBatchItem: {
     id: 'updateTransferBatchItem',
     method: 'PATCH',
-    path: '/transfer-batches/{id}/items/{itemId}',
+    path: '/transfer-batches/{id}/items/{item}',
     idempotency: 'optional',
     sdk: 'transferBatches.updateItem',
   },
   removeTransferBatchItem: {
     id: 'removeTransferBatchItem',
     method: 'DELETE',
-    path: '/transfer-batches/{id}/items/{itemId}',
+    path: '/transfer-batches/{id}/items/{item}',
     idempotency: 'none',
     sdk: 'transferBatches.removeItem',
   },

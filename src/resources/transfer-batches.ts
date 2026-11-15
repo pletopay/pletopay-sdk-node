@@ -60,12 +60,12 @@ export class TransferBatches extends Resource {
     params: TransferBatchItemUpdateParams,
     options?: RequestOptions,
   ): Promise<TransferBatchItem> {
-    return this.client.call(OPERATIONS.updateTransferBatchItem, { path: { id, itemId }, body: params, options });
+    return this.client.call(OPERATIONS.updateTransferBatchItem, { path: { id, item: itemId }, body: params, options });
   }
 
   /** Removes a row before submit. It is kept as `removed` and left out of the totals. */
   removeItem(id: string, itemId: string, options?: RequestOptions): Promise<TransferBatch> {
-    return this.client.call(OPERATIONS.removeTransferBatchItem, { path: { id, itemId }, options });
+    return this.client.call(OPERATIONS.removeTransferBatchItem, { path: { id, item: itemId }, options });
   }
 
   /** Closes a `draft` to new rows and checks every account: `validating`, then `ready`. */

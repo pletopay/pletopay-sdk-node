@@ -45,7 +45,7 @@ describe('transferBatches', () => {
       `POST ${API}/transfer-batches/tb_1/cancel`,
     ]);
     expect(calls[1]!.headers['idempotency-key']).toBeUndefined();
-    await expect(c.transferBatches.updateItem('tb_1', '', {})).rejects.toThrow(/itemId is required/);
+    await expect(c.transferBatches.updateItem('tb_1', '', {})).rejects.toThrow(/item is required/);
   });
 
   it('pages through rows forwards with a status filter', async () => {

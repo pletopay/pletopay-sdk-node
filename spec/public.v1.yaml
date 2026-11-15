@@ -5651,7 +5651,7 @@ paths:
         - Bulk transfers
       x-required-scopes:
         - transfers:write
-  /api/v1/transfer-batches/{id}/items/{itemId}:
+  /api/v1/transfer-batches/{id}/items/{item}:
     patch:
       description: "Fix a row before you submit: the bank code, account number, amount, narration or reference. Changing the account (or editing an `invalid` row) checks it again, and the batch is `validating` until it is done."
       operationId: updateTransferBatchItem
@@ -5662,12 +5662,12 @@ paths:
           schema:
             type: string
           description: The bulk transfer id (`tb_…`).
-        - name: itemId
+        - name: item
           required: true
           in: path
           schema:
             type: string
-          description: The row id (`tbi_…`).
+          description: The batch row id (`tbi_…`).
         - name: PletoPay-Version
           in: header
           description: Dated API version. Defaults to the version pinned on your organization.
@@ -5860,12 +5860,12 @@ paths:
           schema:
             type: string
           description: The bulk transfer id (`tb_…`).
-        - name: itemId
+        - name: item
           required: true
           in: path
           schema:
             type: string
-          description: The row id (`tbi_…`).
+          description: The batch row id (`tbi_…`).
         - name: PletoPay-Version
           in: header
           description: Dated API version. Defaults to the version pinned on your organization.

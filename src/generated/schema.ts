@@ -513,7 +513,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/transfer-batches/{id}/items/{itemId}": {
+    "/api/v1/transfer-batches/{id}/items/{item}": {
         parameters: {
             query?: never;
             header?: never;
@@ -14477,8 +14477,8 @@ export interface operations {
             path: {
                 /** @description The bulk transfer id (`tb_…`). */
                 id: string;
-                /** @description The row id (`tbi_…`). */
-                itemId: string;
+                /** @description The batch row id (`tbi_…`). */
+                item: string;
             };
             cookie?: never;
         };
@@ -14697,8 +14697,8 @@ export interface operations {
             path: {
                 /** @description The bulk transfer id (`tb_…`). */
                 id: string;
-                /** @description The row id (`tbi_…`). */
-                itemId: string;
+                /** @description The batch row id (`tbi_…`). */
+                item: string;
             };
             cookie?: never;
         };
