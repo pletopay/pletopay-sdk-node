@@ -1225,13 +1225,13 @@ const result = await pletopay.transferBatches.addItems(id, {
   });
 ```
 
-### `pletopay.transferBatches.updateItem(id, itemId, params, options?)`
+### `pletopay.transferBatches.updateItem(id, item, params, options?)`
 
-`PATCH /api/v1/transfer-batches/{id}/items/{itemId}` · operation `updateTransferBatchItem` · Idempotency-Key accepted (generated when omitted)
+`PATCH /api/v1/transfer-batches/{id}/items/{item}` · operation `updateTransferBatchItem` · Idempotency-Key accepted (generated when omitted)
 
 Fix a row before you submit: the bank code, account number, amount, narration or reference. Changing the account (or editing an `invalid` row) checks it again, and the batch is `validating` until it is done.
 
-**Path arguments:** `id` (The bulk transfer id (`tb_…`).), `itemId` (The row id (`tbi_…`).)
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).), `item` (The batch row id (`tbi_…`).)
 
 **Request fields** (`UpdateBatchItem`):
 
@@ -1248,18 +1248,18 @@ Fix a row before you submit: the bank code, account number, amount, narration or
 **Example**
 
 ```ts
-const result = await pletopay.transferBatches.updateItem(id, itemId, {
+const result = await pletopay.transferBatches.updateItem(id, item, {
     "account_number": "0123456780"
   });
 ```
 
-### `pletopay.transferBatches.removeItem(id, itemId, options?)`
+### `pletopay.transferBatches.removeItem(id, item, options?)`
 
-`DELETE /api/v1/transfer-batches/{id}/items/{itemId}` · operation `removeTransferBatchItem`
+`DELETE /api/v1/transfer-batches/{id}/items/{item}` · operation `removeTransferBatchItem`
 
 Remove a row before you submit. It is kept, as `removed`, and left out of the totals.
 
-**Path arguments:** `id` (The bulk transfer id (`tb_…`).), `itemId` (The row id (`tbi_…`).)
+**Path arguments:** `id` (The bulk transfer id (`tb_…`).), `item` (The batch row id (`tbi_…`).)
 
 **Returns** (HTTP 200): [TransferBatch](#transferbatch) — The bulk transfer with its new totals.
 
